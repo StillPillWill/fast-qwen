@@ -13,7 +13,7 @@ __global__ void fused_q4_to_fp32_gemv_kernel(const BlockQ4* __restrict__ W, cons
         BlockQ4 blk = row_ptr[b];
         float s = blk.scale;
         for (int i = 0; i < 16; ++i) {
-            uint8_t p = blk.weights[i];
+            uint8_t p = blk.qs[i];
             acc = fmaf((float)(p & 0x0F) * s, x[b * 32 + i * 2], acc);
             acc = fmaf((float)(p >> 4) * s, x[b * 32 + i * 2 + 1], acc);
         }

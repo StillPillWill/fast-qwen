@@ -174,7 +174,7 @@ extern "C" __global__ void fused_logit_sampling_kernel(
 }
 
 // ─── Host-side launchers ──────────────────────────────────────────────────────
-void launch_lm_head_gemv(
+extern "C" void launch_lm_head_gemv(
     cudaStream_t   stream,
     const float*   lm_head_gpu,        // VRAM-resident
     const float*   hidden_state_gpu,   // result from expert sum
@@ -186,7 +186,7 @@ void launch_lm_head_gemv(
         lm_head_gpu, hidden_state_gpu, logits_gpu);
 }
 
-void launch_logit_sampling(
+extern "C" void launch_logit_sampling(
     cudaStream_t   stream,
     const float*   logits_gpu,
     float          temperature,

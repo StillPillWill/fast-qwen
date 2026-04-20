@@ -45,29 +45,35 @@ static void pin_thread_to_core(int id) {
 
 static void worker_a_func(int id) {
     pin_thread_to_core(id); WorkerState& s = g_workers[id];
+    SiblingWorkItem& sw = g_sibling_works[id / 2];
 #ifdef _WIN32
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 #endif
     while (!s.should_exit.load(std::memory_order_relaxed)) {
-        if (s.has_work.load(std::memory_order_acquire)) { s.work(); s.has_work.store(false, std::memory_order_release); }
+        if (s.has_work.load(std::memory_order_acquire)) { 
+            s.work(); 
+            s.has_work.store(false, std::memory_order_release); 
+        }
+        if (sw.ready.load(std::memory_order_acquire)) {
+            const ExpertWeights* W = sw.weights; int rs = sw.row_start, re = sw.row_end; size_t p = (HIDDEN_DIM * 3 / 8 + 31) & ~31;
+            quip_matmul_fused(W->gate_proj + (size_t)rs * p, sw.x_rot, sw.gate_out + rs, W->gate_scale, re - rs, HIDDEN_DIM);
+            quip_matmul_fused(W->up_proj + (size_t)rs * p, sw.x_rot, sw.up_out + rs, W->up_scale, re - rs, HIDDEN_DIM);
+            sw.ready.store(false, std::memory_order_release);
+        }
         _mm_pause();
     }
 }
 
 static void worker_b_func(int id) {
-    pin_thread_to_core(id); int pid = id / 2; FetcherRequest& req = g_fetch_requests[pid]; SiblingWorkItem& sw = g_sibling_works[pid]; SPSCRing<WeightTile, 4>& ring = g_workers[id - 1].tile_ring; WorkerState& s = g_workers[id];
+    pin_thread_to_core(id); int pid = id / 2; FetcherRequest& req = g_fetch_requests[pid]; 
+    SPSCRing<WeightTile, 4>& ring = g_workers[id - 1].tile_ring; WorkerState& s = g_workers[id];
     while (!s.should_exit.load(std::memory_order_relaxed)) {
-        if (sw.ready.load(std::memory_order_acquire)) {
-            const ExpertWeights* W = sw.weights; int rs = sw.row_start, re = sw.row_end; size_t p = (HIDDEN_DIM * 3 / 8 + 31) & ~31;
-            quip_matmul_fused(W->gate_proj + rs * p, sw.x_rot, sw.gate_out + rs, W->gate_scale, re - rs, HIDDEN_DIM);
-            quip_matmul_fused(W->up_proj + rs * p, sw.x_rot, sw.up_out + rs, W->up_scale, re - rs, HIDDEN_DIM);
-            sw.ready.store(false, std::memory_order_release);
-        }
         if (req.active.load(std::memory_order_acquire)) {
             const uint8_t* p = req.base_ptr; size_t rem = req.total_bytes;
             while (rem > 0 && !s.should_exit.load(std::memory_order_relaxed)) {
                 size_t tb = (rem < L3_TILE_BYTES) ? rem : L3_TILE_BYTES;
-                for (size_t o = 0; o < tb; o += CACHE_LINE) _mm_prefetch((const char*)(p + o), _MM_HINT_T1);
+                // Use NTA hint to avoid blowing out L2 cache (Broadwell L2 is only 256KB)
+                for (size_t o = 0; o < tb; o += CACHE_LINE) _mm_prefetch((const char*)(p + o), _MM_HINT_NTA);
                 ring.push({p, req.type, req.expert_idx, req.layer_idx, tb});
                 p += tb; rem -= tb;
             }

@@ -29,6 +29,7 @@
 struct alignas(16) BlockQ4 {
     float   scale;
     uint8_t qs[32];
+    uint8_t pad[12]; // Pad to 48 bytes for better memory latency
 };
 
 #define LAUNCH_KERNEL(name, grid, block, smem, stream, ...) \
@@ -48,7 +49,7 @@ constexpr int   HEAD_DIM            = 128;
 constexpr int   OUT_INNER           = 4096;
 
 constexpr int   MAX_SEQ_LEN         = 8192;
-constexpr int   NUM_WORKER_THREADS  = 18;
+constexpr int   NUM_WORKER_THREADS  = 28; // 14 physical cores * 2 (HT)
 constexpr int   WORKER_CORE_OFFSET  = 2;
 
 constexpr size_t WEIGHT_POOL_BYTES  = 24ULL * 1024 * 1024 * 1024;
@@ -71,7 +72,29 @@ struct RouterResult {
 struct ExpertWeights {
     const uint8_t* gate_proj; const uint8_t* up_proj; const uint8_t* down_proj;
     float gate_scale, up_scale, down_scale;
-    float rms_weight[HIDDEN_DIM]; float rms_eps;
+    const float* rms_weight; float rms_eps;
+};
+
+struct HybridWeights {
+    BlockQ4* attn_q; BlockQ4* attn_k; BlockQ4* attn_v; BlockQ4* attn_out;
+    BlockQ4* ssm_qkv; BlockQ4* ssm_gate; BlockQ4* ssm_out;
+};
+
+struct SSMParams {
+    float *a, *alpha, *beta, *dt, *conv1d, *norm;
+};
+
+struct ModelWeights {
+    float* gate_w; float* lm_head;
+    float* dev_attn_norm; float* dev_ffn_norm; float* dev_final_norm;
+    uint8_t* shared_gate; uint8_t* shared_up; uint8_t* shared_down;
+    uint8_t* expert_gate; uint8_t* expert_up; uint8_t* expert_down;
+    uint8_t* k_cache; uint8_t* v_cache; float* kv_scales;
+    float* embed_table; float* attn_norm; float* ffn_norm; float* final_norm; float* cpu_scales;
+    HybridWeights* hw;
+    SSMParams* ssm_p;
+    
+    BlockQ4 *Wq, *Wk, *Wv, *Wo; // Global if needed, or per-layer
 };
 
 struct EngineConfig {

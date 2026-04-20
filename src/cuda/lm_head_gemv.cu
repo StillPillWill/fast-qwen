@@ -155,21 +155,50 @@ extern "C" __global__ void fused_logit_sampling_kernel(
     }
 
     // ── Stochastic categorical sampling ───────────────────────────────────────
-    // Draw a random threshold in[0, 1). Eliminates the top-p sampling bias
-    // by doing a full valid mathematical categorical sample across the unsorted vocab.
-    curandState_t rng;
-    if (tid == 0) {
-        curand_init(rng_seed, 0, 0, &rng);
+    if (temperature >= 1e-4f) {
+        curandState_t rng; curand_init(rng_seed, tid, 0, &rng);
         float target = curand_uniform(&rng) * gsum;
-        float cum    = 0.0f;
-        for (int v = 0; v < VOCAB_SIZE; ++v) {
-            cum += expf((logits[v] - gmax) * inv_temp);
-            if (cum >= target) {
-                *next_token_id = v;
-                return;
+        
+        // Parallel scan to find the token
+        __shared__ float s_scan[256];
+        float cum = 0.0f;
+        int found_v = -1;
+        
+        // This is still somewhat complex to do perfectly in parallel without a full scan
+        // A simpler way: each thread computes its local sum of exp(...)
+        float thread_sum = 0.0f;
+        for (int v = tid; v < VOCAB_SIZE; v += 256) {
+            thread_sum += expf((logits[v] - gmax) * inv_temp);
+        }
+        s_scan[tid] = thread_sum;
+        __syncthreads();
+        
+        // Inclusive prefix sum on s_scan
+        float val = s_scan[tid];
+        for (int off = 1; off < 256; off <<= 1) {
+            float other = (tid >= off) ? s_scan[tid - off] : 0.0f;
+            __syncthreads();
+            s_scan[tid] = val + other;
+            val = s_scan[tid];
+            __syncthreads();
+        }
+        
+        // Now find which thread has the target
+        int owner_tid = 0;
+        while (owner_tid < 256 && s_scan[owner_tid] < target) owner_tid++;
+        if (owner_tid >= 256) owner_tid = 255;
+        
+        if (tid == owner_tid) {
+            float base = (owner_tid > 0) ? s_scan[owner_tid - 1] : 0.0f;
+            float local_cum = base;
+            for (int v = tid; v < VOCAB_SIZE; v += 256) {
+                local_cum += expf((logits[v] - gmax) * inv_temp);
+                if (local_cum >= target) {
+                    *next_token_id = v;
+                    break;
+                }
             }
         }
-        *next_token_id = VOCAB_SIZE - 1;  // fallback
     }
 }
 

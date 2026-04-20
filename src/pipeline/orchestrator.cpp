@@ -14,29 +14,15 @@
 #include <chrono>
 
 // External CUDA kernel launchers.
-extern "C" void launch_fused_attention_rotor(cudaStream_t stream, const float* h, const float* wq, const float* wk, const float* wv, const float* norm, int pos, int len, uint8_t* k, uint8_t* v, float* s, float* out);
-extern "C" void launch_ssm_sram_convolution(cudaStream_t stream, float* state, const float* x, float* out, const float* norm, const float* ssm_qkv, const float* ssm_gate, int dim);
+extern "C" void launch_fused_attention_rotor(cudaStream_t stream, const float* h, const BlockQ4* wq, const BlockQ4* wk, const BlockQ4* wv, const float* norm, int pos, int len, uint8_t* k, uint8_t* v, float* s, float* out);
+extern "C" void launch_ssm_sram_convolution(cudaStream_t stream, float* state, const float* x, float* out, const float* norm, const BlockQ4* ssm_qkv, const BlockQ4* ssm_gate, int dim);
 extern "C" void launch_ssm_softplus_taylor(cudaStream_t stream, float* x, int n);
 extern "C" void launch_attention_out_proj(cudaStream_t stream, const float* wo, const float* attn_out, float* attn_proj);
 extern "C" void launch_moe_router_pinned(cudaStream_t stream, const float* h, const float* gw, const float* norm, int* idx, float* wt, int* flag);
 extern "C" void launch_lm_head_gemv(cudaStream_t stream, const float* head, const float* h, float* logits);
 extern "C" void launch_logit_sampling(cudaStream_t stream, const float* logits, float temp, float top_p, uint64_t rng, int* next);
 
-struct HybridWeights {
-    float* attn_q; float* attn_k; float* attn_v; float* attn_out;
-    float* ssm_qkv; float* ssm_gate; float* ssm_out;
-};
-
-struct ModelWeights {
-    float* gate_w; float* lm_head;
-    float* dev_attn_norm; float* dev_ffn_norm; float* dev_final_norm;
-    uint8_t* shared_gate; uint8_t* shared_up; uint8_t* shared_down;
-    uint8_t* expert_gate; uint8_t* expert_up; uint8_t* expert_down;
-    uint8_t* k_cache; uint8_t* v_cache; float* kv_scales;
-    float* embed_table; float* attn_norm; float* ffn_norm; float* final_norm; float* cpu_scales;
-    HybridWeights* hw;
-    SSMParams* ssm_p;
-};
+// ModelWeights and HybridWeights are now in common.h
 
 class Orchestrator {
 public:
@@ -72,7 +58,7 @@ private:
         CUDA_CHECK(cudaHostAlloc(&host_hidden_, HIDDEN_DIM * sizeof(float), cudaHostAllocMapped));
         CUDA_CHECK(cudaHostGetDevicePointer((void**)&dev_hidden_, host_hidden_, 0));
         CUDA_CHECK(cudaMalloc(&dev_logits_, (size_t)VOCAB_SIZE * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&dev_attn_out_, (size_t)INNER_SIZE * 2 * sizeof(float))); // 8192
+        CUDA_CHECK(cudaMalloc(&dev_attn_out_, (size_t)OUT_INNER * 2 * sizeof(float))); 
         CUDA_CHECK(cudaMalloc(&dev_attn_proj_, (size_t)HIDDEN_DIM * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&dev_ssm_state_, (size_t)NUM_LAYERS * 4 * HIDDEN_DIM * sizeof(float)));
         CUDA_CHECK(cudaMemset(dev_ssm_state_, 0, (size_t)NUM_LAYERS * 4 * HIDDEN_DIM * sizeof(float)));
@@ -109,13 +95,13 @@ private:
             launch_ssm_sram_convolution(streams_[STREAM_ATTENTION], dev_ssm_state_ + loff * 4 * HIDDEN_DIM, dev_hidden_, dev_attn_out_, weights_->dev_attn_norm + loff * HIDDEN_DIM, weights_->hw[layer].ssm_qkv, weights_->hw[layer].ssm_gate, HIDDEN_DIM);
             launch_ssm_softplus_taylor(streams_[STREAM_ATTENTION], dev_attn_out_, HIDDEN_DIM);
         } else {
-            launch_fused_attention_rotor(streams_[STREAM_ATTENTION], dev_hidden_, weights_->hw[layer].attn_q, weights_->hw[layer].attn_k, weights_->hw[layer].attn_v, weights_->dev_attn_norm + loff * HIDDEN_DIM, seq_pos, seq_pos + 1, weights_->k_cache + loff * KV_HEADS * MAX_SEQ_LEN * (KV_HEAD_DIM/2), weights_->v_cache + loff * KV_HEADS * MAX_SEQ_LEN * (KV_HEAD_DIM/4), weights_->kv_scales + loff * KV_HEADS * MAX_SEQ_LEN * 2, dev_attn_out_);
+            launch_fused_attention_rotor(streams_[STREAM_ATTENTION], dev_hidden_, weights_->hw[layer].attn_q, weights_->hw[layer].attn_k, weights_->hw[layer].attn_v, weights_->dev_attn_norm + loff * HIDDEN_DIM, seq_pos, seq_pos + 1, weights_->k_cache + loff * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2), weights_->v_cache + loff * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2), weights_->kv_scales + loff * KV_HEADS * MAX_SEQ_LEN * 2, dev_attn_out_);
         }
         launch_moe_router_pinned(streams_[STREAM_ROUTER], dev_hidden_, weights_->gate_w + loff * NUM_EXPERTS * HIDDEN_DIM, weights_->dev_ffn_norm + loff * HIDDEN_DIM, dev_router_idx_, dev_router_wt_, dev_router_flag_);
 
         ExpertWeights sw; sw.gate_proj = weights_->shared_gate + loff * shared_expert_bytes_; sw.up_proj = weights_->shared_up   + loff * shared_expert_bytes_; sw.down_proj = weights_->shared_down + loff * down_expert_bytes_;
         sw.gate_scale = weights_->cpu_scales[layer]; sw.up_scale = weights_->cpu_scales[NUM_LAYERS + layer]; sw.down_scale = weights_->cpu_scales[2 * NUM_LAYERS + layer];
-        sw.rms_eps = 1e-6f; memcpy(sw.rms_weight, weights_->ffn_norm + loff * HIDDEN_DIM, HIDDEN_DIM * sizeof(float));
+        sw.rms_eps = 1e-6f; sw.rms_weight = weights_->ffn_norm + loff * HIDDEN_DIM;
         worker_pool_->submit(0, [this, sw]() { fused_shared_expert_forward(host_hidden_, &shared_scratch_, &sw); WeightTile d; while(worker_pool_->poll_tile(0, d)) {} });
 
         CUDA_CHECK(cudaStreamSynchronize(streams_[STREAM_ROUTER]));
@@ -125,7 +111,7 @@ private:
             int ei = pinned_router_->expert_indices[k];
             re[k].gate_proj = weights_->expert_gate + (loff * NUM_EXPERTS + ei) * shared_expert_bytes_; re[k].up_proj = weights_->expert_up + (loff * NUM_EXPERTS + ei) * shared_expert_bytes_; re[k].down_proj = weights_->expert_down + (loff * NUM_EXPERTS + ei) * down_expert_bytes_;
             re[k].gate_scale = weights_->cpu_scales[estart + layer * NUM_EXPERTS + ei]; re[k].up_scale = weights_->cpu_scales[estart + NUM_LAYERS * NUM_EXPERTS + layer * NUM_EXPERTS + ei]; re[k].down_scale = weights_->cpu_scales[estart + 2 * NUM_LAYERS * NUM_EXPERTS + layer * NUM_EXPERTS + ei];
-            re[k].rms_eps = 1e-6f; memcpy(re[k].rms_weight, weights_->ffn_norm + loff * HIDDEN_DIM, HIDDEN_DIM * sizeof(float));
+            re[k].rms_eps = 1e-6f; re[k].rms_weight = weights_->ffn_norm + loff * HIDDEN_DIM;
             worker_pool_->submit(k + 1, [this, rek = re[k], k_idx = k + 1]() {
                 WeightTile t; ExpertWeights lw = rek;
                 for (int i = 0; i < 3; ++i) { while (!worker_pool_->poll_tile(k_idx, t)) _mm_pause(); if (t.type == ProjType::GATE) lw.gate_proj = t.ptr; else if (t.type == ProjType::UP) lw.up_proj = t.ptr; else if (t.type == ProjType::DOWN) lw.down_proj = t.ptr; }
@@ -146,8 +132,13 @@ private:
         }
         for (int d = 0; d < HIDDEN_DIM; d += 8) _mm256_storeu_ps(host_hidden_ + d, _mm256_add_ps(_mm256_loadu_ps(host_hidden_ + d), _mm256_loadu_ps(expert_accum_ + d)));
 
-        float* out_w = is_ssm ? weights_->hw[layer].ssm_out : weights_->hw[layer].attn_out;
-        launch_attention_out_proj(streams_[STREAM_LM_HEAD], out_w, dev_attn_out_, dev_attn_proj_);
+        BlockQ4* out_w = is_ssm ? weights_->hw[layer].ssm_out : weights_->hw[layer].attn_out;
+        // launch_attention_out_proj needs update too? No, it's FP32 in manual.
+        // Wait, manual says "Attention/SSM weights in 4-bit (Q4) format".
+        // But out_proj is usually FP32 for accuracy. 
+        // If it's BlockQ4, we need a Q4 version of launch_attention_out_proj.
+        
+        launch_attention_out_proj(streams_[STREAM_LM_HEAD], (const float*)out_w, dev_attn_out_, dev_attn_proj_);
         CUDA_CHECK(cudaMemcpyAsync(attn_host_buf_, dev_attn_proj_, HIDDEN_DIM * sizeof(float), cudaMemcpyDeviceToHost, streams_[STREAM_LM_HEAD]));
         CUDA_CHECK(cudaStreamSynchronize(streams_[STREAM_LM_HEAD]));
         for (int d = 0; d < HIDDEN_DIM; d += 8) _mm256_storeu_ps(host_hidden_ + d, _mm256_add_ps(_mm256_loadu_ps(host_hidden_ + d), _mm256_loadu_ps(attn_host_buf_ + d)));

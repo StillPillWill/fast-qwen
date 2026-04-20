@@ -46,4 +46,11 @@ for src in SRCS:
 # Link everything into the final executable
 run(f"{NVCC} -m 64 -arch=sm_61 -allow-unsupported-compiler {' '.join(OBJS)} -o engine.exe")
 
+# Build and Run Tests
+print("Building Test Suite...")
+test_objs = [obj for obj in OBJS if "main.obj" not in obj]
+run(f"{NVCC} {NVCC_FLAGS} {' '.join(test_objs)} test_suite.cu -o test_suite.exe")
+print("Running Test Suite...")
+run("test_suite.exe")
+
 print("\nSUCCESS: Compilation finished using 64-bit environment and nvcc.")

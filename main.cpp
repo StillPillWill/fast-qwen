@@ -1,17 +1,11 @@
-// =============================================================================
-// main.cpp — Entry point: model load, NUMA setup, inference loop.
-// =============================================================================
-
 #include "include/common.h"
 #include "include/allocator.h"
 #include "src/pipeline/orchestrator.cpp"
 #include <iostream>
-#include <vector>
+#include <fstream>
 #include <string>
-#include <cstdlib>
-#include <cstring>
 #include <vector>
-#include <algorithm>
+#include <map>
 
 EngineConfig config;
 
@@ -23,87 +17,121 @@ extern "C" void quip_init_rotors_and_codebooks();
   #include <windows.h>
   static void acquire_large_page_privilege() {
       if (!config.use_large_pages) return;
-      HANDLE token; OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token);
-      TOKEN_PRIVILEGES tp{1}; LookupPrivilegeValue(nullptr, SE_LOCK_MEMORY_NAME, &tp.Privileges[0].Luid);
-      tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-      AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr); CloseHandle(token);
+      HANDLE token; 
+      if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
+          TOKEN_PRIVILEGES tp;
+          tp.PrivilegeCount = 1;
+          LookupPrivilegeValue(nullptr, SE_LOCK_MEMORY_NAME, &tp.Privileges[0].Luid);
+          tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+          AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr);
+          CloseHandle(token);
+      }
       fprintf(stderr, "[Main] Large-page privilege requested.\n");
   }
   static void lock_process_to_numa0() {
       if (!config.enable_numa_lock) { fprintf(stderr, "[Main] NUMA lock disabled.\n"); return; }
-      DWORD_PTR pm, sm; if (GetProcessAffinityMask(GetCurrentProcess(), &pm, &sm)) {
-          if (SetProcessAffinityMask(GetCurrentProcess(), sm)) fprintf(stderr, "[Main] Affinity unlocked to all %llu cores.\n", (unsigned long long)sm);
+      if (!SetProcessAffinityMask(GetCurrentProcess(), 0x3FFF)) {
+          fprintf(stderr, "[Main] Failed to set process affinity.\n");
+      } else {
+          fprintf(stderr, "[Main] Process locked to NUMA Node 0 (Mask: 0x3FFF).\n");
       }
       SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
       fprintf(stderr, "[Main] REALTIME priority set.\n");
   }
 #else
   static void acquire_large_page_privilege() {}
-  static void lock_process_to_numa0() { if (!config.enable_numa_lock) return; fprintf(stderr, "[Main] Run via numactl.\n"); }
+  static void lock_process_to_numa0() {}
 #endif
 
+struct TensorInfo { size_t offset; size_t size; };
+std::map<std::string, TensorInfo> parse_manifest(const std::string& path) {
+    std::map<std::string, TensorInfo> manifest;
+    std::ifstream f(path); if (!f.is_open()) return manifest;
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t name_start = line.find("\""); if (name_start == std::string::npos) continue;
+        size_t name_end = line.find("\"", name_start + 1);
+        std::string name = line.substr(name_start + 1, name_end - name_start - 1);
+        if (line.find("{") != std::string::npos) {
+            std::string o_line, s_line;
+            std::getline(f, o_line); std::getline(f, s_line);
+            auto get_val = [](const std::string& l) {
+                size_t c = l.find(":"); return std::stoull(l.substr(c + 1, l.find_last_of("0123456789") - c));
+            };
+            manifest[name] = { get_val(o_line), get_val(s_line) };
+        }
+    }
+    return manifest;
+}
+
 ModelWeights* load_model(NUMAPool& weight_pool, NUMAPool& kv_pool) {
+    auto manifest = parse_manifest("model.json");
     FILE* f = fopen("model.bin", "rb"); if (!f) ENGINE_FATAL("Could not open model.bin");
     ModelWeights* W = new ModelWeights();
-    auto expert_bytes = [](int rows, int cols) { return (size_t)rows * ((cols * 3 / 8 + 31) & ~31); };
-    size_t seb = expert_bytes(FFN_INTERMEDIATE, HIDDEN_DIM), deb = expert_bytes(HIDDEN_DIM, FFN_INTERMEDIATE);
-    size_t scales_bytes = (size_t)(NUM_LAYERS * 3 + NUM_LAYERS * NUM_EXPERTS * 3) * sizeof(float);
+    W->hw = new HybridWeights[NUM_LAYERS];
 
-    W->shared_gate = (uint8_t*)weight_pool.alloc(seb * NUM_LAYERS);
-    W->shared_up   = (uint8_t*)weight_pool.alloc(seb * NUM_LAYERS);
-    W->shared_down = (uint8_t*)weight_pool.alloc(deb * NUM_LAYERS);
-    W->expert_gate = (uint8_t*)weight_pool.alloc(seb * NUM_LAYERS * NUM_EXPERTS);
-    W->expert_up   = (uint8_t*)weight_pool.alloc(seb * NUM_LAYERS * NUM_EXPERTS);
-    W->expert_down = (uint8_t*)weight_pool.alloc(deb * NUM_LAYERS * NUM_EXPERTS);
-    W->embed_table = (float*)weight_pool.alloc((size_t)VOCAB_SIZE * HIDDEN_DIM * sizeof(float));
-    W->attn_norm   = (float*)weight_pool.alloc((size_t)NUM_LAYERS * HIDDEN_DIM * sizeof(float));
-    W->ffn_norm    = (float*)weight_pool.alloc((size_t)NUM_LAYERS * HIDDEN_DIM * sizeof(float));
-    W->final_norm  = (float*)weight_pool.alloc(HIDDEN_DIM * sizeof(float));
-    W->cpu_scales  = (float*)weight_pool.alloc(scales_bytes);
+    auto load_to_pool = [&](const std::string& name, void*& ptr, NUMAPool& pool) {
+        if (manifest.find(name) == manifest.end()) return;
+        ptr = pool.alloc(manifest[name].size);
+        fseek(f, manifest[name].offset, SEEK_SET);
+        fread(ptr, 1, manifest[name].size, f);
+    };
 
-    fread(W->shared_gate, 1, seb * NUM_LAYERS, f); fread(W->shared_up, 1, seb * NUM_LAYERS, f); fread(W->shared_down, 1, deb * NUM_LAYERS, f);
-    fread(W->expert_gate, 1, seb * NUM_LAYERS * NUM_EXPERTS, f); fread(W->expert_up, 1, seb * NUM_LAYERS * NUM_EXPERTS, f); fread(W->expert_down, 1, deb * NUM_LAYERS * NUM_EXPERTS, f);
-    fread(W->embed_table, sizeof(float), (size_t)VOCAB_SIZE * HIDDEN_DIM, f);
+    auto load_to_cuda = [&](const std::string& name, void*& dev_ptr) {
+        if (manifest.find(name) == manifest.end()) return;
+        size_t sz = manifest[name].size;
+        CUDA_CHECK(cudaMalloc(&dev_ptr, sz));
+        std::vector<char> buf(sz);
+        fseek(f, manifest[name].offset, SEEK_SET);
+        fread(buf.data(), 1, sz, f);
+        CUDA_CHECK(cudaMemcpy(dev_ptr, buf.data(), sz, cudaMemcpyHostToDevice));
+    };
 
-    size_t qlb = (size_t)Q_HEADS * HEAD_DIM * HIDDEN_DIM * sizeof(float);
-    size_t kvlb = (size_t)KV_HEADS * HEAD_DIM * HIDDEN_DIM * sizeof(float);
-    size_t olb = (size_t)HIDDEN_DIM * OUT_INNER * sizeof(float);
-    size_t lmb = (size_t)VOCAB_SIZE * HIDDEN_DIM * sizeof(float);
-    size_t gb = (size_t)NUM_LAYERS * NUM_EXPERTS * HIDDEN_DIM * sizeof(float);
-    size_t anob = (size_t)NUM_LAYERS * HIDDEN_DIM * sizeof(float);
-    size_t fnob = (size_t)HIDDEN_DIM * sizeof(float);
+    load_to_pool("ffn_gate_shexp", (void*&)W->shared_gate, weight_pool);
+    load_to_pool("ffn_up_shexp", (void*&)W->shared_up, weight_pool);
+    load_to_pool("ffn_down_shexp", (void*&)W->shared_down, weight_pool);
+    load_to_pool("ffn_gate_exps", (void*&)W->expert_gate, weight_pool);
+    load_to_pool("ffn_up_exps", (void*&)W->expert_up, weight_pool);
+    load_to_pool("ffn_down_exps", (void*&)W->expert_down, weight_pool);
+    load_to_pool("token_embd", (void*&)W->embed_table, weight_pool);
+    load_to_pool("attn_norms", (void*&)W->attn_norm, weight_pool);
+    load_to_pool("ffn_norms", (void*&)W->ffn_norm, weight_pool);
+    load_to_pool("output_norm", (void*&)W->final_norm, weight_pool);
+    load_to_pool("scales", (void*&)W->cpu_scales, weight_pool);
 
-    CUDA_CHECK(cudaMalloc(&W->Wq, qlb * NUM_LAYERS)); CUDA_CHECK(cudaMalloc(&W->Wk, kvlb * NUM_LAYERS)); CUDA_CHECK(cudaMalloc(&W->Wv, kvlb * NUM_LAYERS)); CUDA_CHECK(cudaMalloc(&W->Wo, olb * NUM_LAYERS));
-    CUDA_CHECK(cudaMalloc(&W->gate_w, gb)); CUDA_CHECK(cudaMalloc(&W->lm_head, lmb));
-    CUDA_CHECK(cudaMalloc(&W->dev_attn_norm, anob)); CUDA_CHECK(cudaMalloc(&W->dev_ffn_norm, anob)); CUDA_CHECK(cudaMalloc(&W->dev_final_norm, fnob));
-
-    std::vector<char> hbuf(std::max({qlb, kvlb, olb}));
     for (int l = 0; l < NUM_LAYERS; ++l) {
-        fread(hbuf.data(), 1, qlb, f); CUDA_CHECK(cudaMemcpy(W->Wq + l * (qlb/4), hbuf.data(), qlb, cudaMemcpyHostToDevice));
-        fread(hbuf.data(), 1, kvlb, f); CUDA_CHECK(cudaMemcpy(W->Wk + l * (kvlb/4), hbuf.data(), kvlb, cudaMemcpyHostToDevice));
-        fread(hbuf.data(), 1, kvlb, f); CUDA_CHECK(cudaMemcpy(W->Wv + l * (kvlb/4), hbuf.data(), kvlb, cudaMemcpyHostToDevice));
-        fread(hbuf.data(), 1, olb, f); CUDA_CHECK(cudaMemcpy(W->Wo + l * (olb/4), hbuf.data(), olb, cudaMemcpyHostToDevice));
+        if (l % 4 != 3) {
+            load_to_cuda("blk." + std::to_string(l) + ".attn_qkv", (void*&)W->hw[l].ssm_qkv);
+            load_to_cuda("blk." + std::to_string(l) + ".attn_gate", (void*&)W->hw[l].ssm_gate);
+            load_to_cuda("blk." + std::to_string(l) + ".ssm_out", (void*&)W->hw[l].ssm_out);
+        } else {
+            load_to_cuda("blk." + std::to_string(l) + ".attn_q", (void*&)W->hw[l].attn_q);
+            load_to_cuda("blk." + std::to_string(l) + ".attn_k", (void*&)W->hw[l].attn_k);
+            load_to_cuda("blk." + std::to_string(l) + ".attn_v", (void*&)W->hw[l].attn_v);
+            load_to_cuda("blk." + std::to_string(l) + ".attn_output", (void*&)W->hw[l].attn_out);
+        }
     }
-    std::vector<char> gbuf(NUM_EXPERTS * HIDDEN_DIM * sizeof(float));
-    for (int l = 0; l < NUM_LAYERS; ++l) { fread(gbuf.data(), 1, gbuf.size(), f); CUDA_CHECK(cudaMemcpy(W->gate_w + l * NUM_EXPERTS * HIDDEN_DIM, gbuf.data(), gbuf.size(), cudaMemcpyHostToDevice)); }
-    std::vector<char> lmbuf(lmb); fread(lmbuf.data(), 1, lmb, f); CUDA_CHECK(cudaMemcpy(W->lm_head, lmbuf.data(), lmb, cudaMemcpyHostToDevice));
-    for (int l = 0; l < NUM_LAYERS; ++l) { fread(W->attn_norm + l * HIDDEN_DIM, sizeof(float), HIDDEN_DIM, f); fread(W->ffn_norm + l * HIDDEN_DIM, sizeof(float), HIDDEN_DIM, f); }
-    CUDA_CHECK(cudaMemcpy(W->dev_attn_norm, W->attn_norm, anob, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(W->dev_ffn_norm, W->ffn_norm, anob, cudaMemcpyHostToDevice));
-    fread(W->final_norm, sizeof(float), HIDDEN_DIM, f); CUDA_CHECK(cudaMemcpy(W->dev_final_norm, W->final_norm, fnob, cudaMemcpyHostToDevice));
-    fread(W->cpu_scales, 1, scales_bytes, f); fclose(f);
+    load_to_cuda("router_weights", (void*&)W->gate_w);
+    load_to_cuda("output", (void*&)W->lm_head);
+    
+    // Dev norms
+    size_t anob = (size_t)NUM_LAYERS * HIDDEN_DIM * sizeof(float);
+    CUDA_CHECK(cudaMalloc(&W->dev_attn_norm, anob)); CUDA_CHECK(cudaMemcpy(W->dev_attn_norm, W->attn_norm, anob, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(&W->dev_ffn_norm, anob)); CUDA_CHECK(cudaMemcpy(W->dev_ffn_norm, W->ffn_norm, anob, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(&W->dev_final_norm, HIDDEN_DIM * sizeof(float))); CUDA_CHECK(cudaMemcpy(W->dev_final_norm, W->final_norm, HIDDEN_DIM * sizeof(float), cudaMemcpyHostToDevice));
 
+    // KV Cache
     size_t kkb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2);
-    size_t kvvb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/4);
+    size_t kvvb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2); // Symmetric 4-bit
     size_t kscb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * 2 * sizeof(float);
     CUDA_CHECK(cudaMalloc(&W->k_cache, kkb)); CUDA_CHECK(cudaMalloc(&W->v_cache, kvvb)); CUDA_CHECK(cudaMalloc(&W->kv_scales, kscb));
     CUDA_CHECK(cudaMemset(W->k_cache, 0, kkb)); CUDA_CHECK(cudaMemset(W->v_cache, 0, kvvb)); CUDA_CHECK(cudaMemset(W->kv_scales, 0, kscb));
 
-    fprintf(stderr, "[Model] Loaded successfully.\n"); return W;
+    fclose(f);
+    fprintf(stderr, "[Model] Loaded successfully via manifest.\n"); return W;
 }
 
 int main(int argc, char** argv) {
-    config.force_layer_type = 1; // FORCE ATTENTION
     acquire_large_page_privilege(); lock_process_to_numa0();
     NUMAPool weight_pool(WEIGHT_POOL_BYTES, "WeightPool"); NUMAPool kv_pool(KV_POOL_BYTES, "KVPool");
     weight_pool.commit_and_touch(WEIGHT_POOL_BYTES); kv_pool.commit_and_touch(KV_POOL_BYTES);

@@ -4,24 +4,25 @@ import threading
 import argparse
 from transformers import AutoTokenizer
 import os
+import time
 
 def read_stderr(proc, show_metrics):
-    for line in iter(proc.stderr.readline, b''):
-        line = line.decode('utf-8', errors='replace').strip()
-        if not line: continue
-        # Always show FATAL errors
-        if "[FATAL]" in line:
-            print(f"\033[91m{line}\033[0m", file=sys.stderr)
-        elif show_metrics:
-            # Show other metrics
-            print(f"\033[90m{line}\033[0m", file=sys.stderr)
-        elif "[Inference]" in line or "[Model]" in line or "[Main]" in line:
-            # Show progress even without --show-metrics
-            print(f"\033[90m{line}\033[0m", file=sys.stderr)
+    try:
+        for line in iter(proc.stderr.readline, b''):
+            line = line.decode('utf-8', errors='replace').strip()
+            if not line: continue
+            if "[FATAL]" in line:
+                print(f"\n\033[91m{line}\033[0m", file=sys.stderr)
+            elif show_metrics:
+                print(f"\033[90m{line}\033[0m", file=sys.stderr)
+            elif any(x in line for x in ["[Inference]", "[Model]", "[Main]"]):
+                print(f"\033[90m{line}\033[0m", file=sys.stderr)
+    except Exception:
+        pass
 
 def main():
     parser = argparse.ArgumentParser(description="Chat CLI for MoE Engine")
-    parser.add_argument("--show-metrics", action="store_true", help="Print telemetry overlaid", default=True)
+    parser.add_argument("--show-metrics", action="store_true", help="Print telemetry overlaid", default=False)
     args = parser.parse_args()
 
     engine_path = "./engine.exe" if sys.platform == "win32" else "./engine"
@@ -58,6 +59,10 @@ def main():
     print("Type your message below. Type 'exit' or 'quit' to quit.\n")
     
     while True:
+        if proc.poll() is not None:
+            print("\033[91mEngine has exited unexpectedly.\033[0m")
+            break
+            
         try:
             user_input = input("\033[92mYou: \033[0m")
             if user_input.strip().lower() in ['exit', 'quit']:
@@ -67,52 +72,51 @@ def main():
             if not tokens:
                 continue
                 
-            # Send to engine
             token_str = " ".join(map(str, tokens)) + " \n"
             try:
                 proc.stdin.write(token_str.encode('utf-8'))
                 proc.stdin.flush()
-            except OSError as e:
-                print(f"\033[91mEngine Communication Error: {e}\033[0m")
+            except OSError:
                 break
             
             print("\033[96mQwen 3.6: \033[0m", end='', flush=True)
             
-            # Read response from engine
+            # Streaming decode
+            current_tokens = []
             buffer = ""
             while True:
+                if proc.poll() is not None: break
+                
                 char = proc.stdout.read(1)
-                if not char:
-                    break
+                if not char: break
                 char = char.decode('utf-8', errors='ignore')
-                if char == ' ':
+                
+                if char in [' ', '\n']:
                     if buffer:
                         try:
-                            token_str = tokenizer.decode([int(buffer)])
-                            print(token_str, end='', flush=True)
+                            token_id = int(buffer)
+                            current_tokens.append(token_id)
+                            # Correctly handle BPE by decoding the full sequence so far
+                            # and only printing the diff
+                            full_text = tokenizer.decode(current_tokens)
+                            prev_text = tokenizer.decode(current_tokens[:-1]) if len(current_tokens) > 1 else ""
+                            new_text = full_text[len(prev_text):]
+                            print(new_text, end='', flush=True)
                         except ValueError:
-                            print(f" [T:{buffer}]", end='', flush=True)
+                            pass
                         buffer = ""
-                    print(" ", end='', flush=True)
-                elif char == '\n':
-                    if buffer:
-                        try:
-                            token_str = tokenizer.decode([int(buffer)])
-                            print(token_str, end='', flush=True)
-                        except ValueError:
-                            print(f" [T:{buffer}]", end='', flush=True)
-                        buffer = ""
-                    print("", flush=True)
-                    break # Done with this turn
+                    if char == '\n':
+                        print("", flush=True)
+                        break
                 else:
                     buffer += char
                     
         except (KeyboardInterrupt, EOFError):
             break
 
-    proc.terminate()
-    proc.wait()
-    print("\nEngine exited.")
+    if proc.poll() is None:
+        proc.terminate()
+    print("\nDone.")
 
 if __name__ == "__main__":
     main()

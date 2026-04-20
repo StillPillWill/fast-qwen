@@ -88,8 +88,11 @@ private:
 };
 
 // ─── Weight tile descriptor (exchanged via SPSC ring) ────────────────────────
+enum class ProjType { GATE = 0, UP = 1, DOWN = 2 };
+
 struct WeightTile {
     const uint8_t*  ptr;          // 3-bit packed data, already in L3
+    ProjType        type;
     int             expert_idx;   // which expert this belongs to
     int             layer_idx;
     size_t          byte_count;
@@ -175,6 +178,7 @@ struct FetcherRequest {
     std::atomic<bool>     active{false};
     const uint8_t*        base_ptr;    // start of expert weight block
     size_t                total_bytes; // total bytes to prefetch
+    ProjType              type;
     int                   expert_idx;
     int                   layer_idx;
 };
@@ -237,12 +241,23 @@ static void worker_b_func(int worker_id) {
                 for (size_t off = 0; off < tile_bytes; off += CACHE_LINE)
                     _mm_prefetch(reinterpret_cast<const char*>(p + off), _MM_HINT_T1);
 
-                WeightTile tile{p, req.expert_idx, req.layer_idx, tile_bytes};
+                WeightTile tile{p, req.type, req.expert_idx, req.layer_idx, tile_bytes};
                 ring.push(tile);
 
                 // Wait until Worker A has consumed the oldest tile before moving on.
                 while (ring.size() >= (size_t)look_ahead_tiles
                        && !state.should_exit.load(std::memory_order_relaxed)) {
+                    // --- Resolve Deadlock: check if we need to do math while waiting ---
+                    if (g_sibling_work.ready.load(std::memory_order_acquire)) {
+                        const ExpertWeights* W   = g_sibling_work.weights;
+                        int rs = g_sibling_work.row_start;
+                        int re = g_sibling_work.row_end;
+                        const size_t pitch = (HIDDEN_DIM * 3 / 8 + 31) & ~31;
+                        quip_matmul_fused(W->gate_proj + rs * pitch, g_sibling_work.x_rot, g_sibling_work.gate_out + rs, W->gate_scale, re - rs, HIDDEN_DIM);
+                        quip_matmul_fused(W->up_proj + rs * pitch, g_sibling_work.x_rot, g_sibling_work.up_out + rs, W->up_scale, re - rs, HIDDEN_DIM);
+                        std::atomic_thread_fence(std::memory_order_release);
+                        g_sibling_work.ready.store(false, std::memory_order_relaxed);
+                    }
                     _mm_pause();
                 }
 
@@ -311,6 +326,7 @@ public:
         int            pair_id,
         const uint8_t* ptr,
         size_t         bytes,
+        ProjType       type,
         int            expert_idx,
         int            layer_idx)
     {
@@ -323,6 +339,7 @@ public:
         }
         req.base_ptr    = ptr;
         req.total_bytes = bytes;
+        req.type        = type;
         req.expert_idx  = expert_idx;
         req.layer_idx   = layer_idx;
         std::atomic_thread_fence(std::memory_order_release);

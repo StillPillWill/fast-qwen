@@ -18,44 +18,66 @@ NUM_KV_HEADS = 2
 HEAD_DIM = 256
 
 # ==========================================
-# QuIP# Rotation Setup
+# QuIP# Rotation Setup (MATCHES C++ EXACTLY)
 # ==========================================
-def get_rotation_matrix(dim, seed):
-    np.random.seed(seed & 0xFFFFFFFF)
-    tmp = np.random.randn(dim, dim).astype(np.float32)
+def get_rotation_matrix_cpp_style(dim, seed):
+    """Generates the rotation matrix using the exact Xorshift and Gram-Schmidt logic from C++."""
+    rng = np.uint64(seed)
+    tmp = np.zeros((dim, dim), dtype=np.float32)
+    
+    # Ported C++ randu
+    def randu(r):
+        r ^= r << np.uint64(13)
+        r ^= r >> np.uint64(7)
+        r ^= r << np.uint64(17)
+        u = np.float32((r & np.uint64(0xFFFF))) / 65536.0 - 0.5
+        return u, r
+
+    for i in range(dim):
+        for j in range(dim):
+            val, rng = randu(rng)
+            tmp[i, j] = val
+
     # Gram-Schmidt
-    Q, _ = np.linalg.qr(tmp)
+    Q = tmp.copy()
+    for i in range(dim):
+        for j in range(i):
+            dot = np.sum(Q[i] * Q[j])
+            Q[i] -= dot * Q[j]
+        norm = np.sqrt(np.sum(Q[i]**2))
+        Q[i] /= norm
+    
     return Q
 
-ROT_MAT_128 = get_rotation_matrix(128, 0xA5A5A5A5A5A5A5A5)
+ROT_MAT_128 = get_rotation_matrix_cpp_style(128, 0xA5A5A5A5A5A5A5A5)
 
 # ==========================================
 # CORE COMPUTE: Parallel Machine Code with Rotation
 # ==========================================
 @njit(nogil=True, fastmath=True, parallel=True)
 def pack_3bit_ultra(weights_3d, pitch, R):
-    """
-    Parallel packing with QuIP# rotation (W' = W @ R^T).
-    Processes blocks of experts at machine-code speed.
-    """
     num_experts, rows, cols = weights_3d.shape
     packed_out = np.zeros((num_experts, rows, pitch), dtype=np.uint8)
     scales_out = np.zeros(num_experts, dtype=np.float32)
+    
+    # Pre-transpose R for dot product (R.T)
+    RT = R.T.copy()
     
     for e in prange(num_experts):
         expert_raw = weights_3d[e]
         expert_rotated = np.zeros_like(expert_raw)
         
-        # 1. Block-wise Column Rotation (W @ R.T)
+        # Block-wise Column Rotation (W @ R.T)
         for j in range(0, cols, 128):
+            # We want rotated[r, j+co] = sum_ci w[r, j+ci] * RT[ci, co]
+            # RT[ci, co] is R[co, ci]
             for r in range(rows):
                 for co in range(128):
                     dot = 0.0
                     for ci in range(128):
-                        dot += expert_raw[r, j + ci] * R[co, ci] # R.T[ci, co] = R[co, ci]
+                        dot += expert_raw[r, j + ci] * R[co, ci]
                     expert_rotated[r, j + co] = dot
 
-        # 2. Scale calculation
         max_val = 0.0
         for r in range(rows):
             for c in range(cols):
@@ -67,7 +89,6 @@ def pack_3bit_ultra(weights_3d, pitch, R):
         scales_out[e] = np.float32(scale)
         inv_scale = 1.0 / scale
         
-        # 3. Packing (8 weights -> 3 bytes)
         for r in range(rows):
             for c_group in range(cols // 8):
                 val32 = np.uint32(0)
@@ -105,17 +126,14 @@ def convert():
                 return gguf.quants.dequantize(tensor.data, tensor.tensor_type)
             return tensor.data.view(np.float32)
 
-        # 1. Direct match
         if name in tensor_map:
             t = tensor_map[name]
             return extract(t).reshape(t.shape[::-1])
         
-        # 2. Add .weight suffix
         if f"{name}.weight" in tensor_map:
             t = tensor_map[f"{name}.weight"]
             return extract(t).reshape(t.shape[::-1])
         
-        # 3. Handle hybrid MoE naming
         name_mapping = {
             "ffn_gate": "ffn_gate_shexp", "ffn_up": "ffn_up_shexp", "ffn_down": "ffn_down_shexp",
             "ffn_gate_ex": "ffn_gate_exps", "ffn_up_ex": "ffn_up_exps", "ffn_down_ex": "ffn_down_exps",
@@ -128,7 +146,6 @@ def convert():
                 t = tensor_map[mapped_name]
                 return extract(t).reshape(t.shape[::-1])
 
-        # 4. Handle QKV splitting
         if len(parts) >= 3 and parts[2] in ["attn_q", "attn_k", "attn_v"]:
             qkv_name = f"blk.{parts[1]}.attn_qkv.weight"
             if qkv_name in tensor_map:
@@ -142,7 +159,6 @@ def convert():
 
         raise ValueError(f"Tensor {name} not found.")
 
-    # Warming up JIT
     print("Warming up Ultra-Parallel JIT Engine...")
     dummy = np.zeros((1, 128, 128), dtype=np.float32)
     pack_3bit_ultra(dummy, 48, ROT_MAT_128)
@@ -152,7 +168,6 @@ def convert():
         down_pitch = (FFN_INTERMEDIATE * 3 // 8 + 31) & ~31
         all_cpu_scales = []
 
-        # --- Phase 1: Shared Experts ---
         print("\nPhase 1: Shared Experts...")
         for suffix in ["ffn_gate", "ffn_up", "ffn_down"]:
             p_size = expert_pitch if suffix != "ffn_down" else down_pitch
@@ -162,13 +177,11 @@ def convert():
                 f.write(p.tobytes())
                 all_cpu_scales.extend(s.tolist())
 
-        # --- Phase 2: Routed Experts ---
         print("\nPhase 2: Routed Experts...")
         for suffix in ["ffn_gate_ex", "ffn_up_ex", "ffn_down_ex"]:
             p_size = down_pitch if suffix == "ffn_down_ex" else expert_pitch
             for l in tqdm(range(NUM_LAYERS), desc=f"Layer Block ({suffix})"):
                 w_all = fetch_tensor(f"blk.{l}.{suffix}")
-                # Re-orient experts if shape is [HIDDEN, INTER, EXPERTS] -> [EXPERTS, INTER, HIDDEN]
                 if w_all.ndim == 3:
                     if w_all.shape[0] == HIDDEN_DIM or w_all.shape[0] == FFN_INTERMEDIATE:
                         w_all = np.ascontiguousarray(np.transpose(w_all, (2, 1, 0)))
@@ -177,29 +190,20 @@ def convert():
                 f.write(packed_block.tobytes())
                 all_cpu_scales.extend(scales.tolist())
 
-        # --- Phase 3: Embedding ---
         print("\nPhase 3: Embedding...")
         f.write(fetch_tensor("token_embd").astype(np.float32).tobytes())
 
-        # --- Phase 4-7: GPU Weights & Norms ---
         print("\nPhase 4-7: GPU Attention & Norms...")
         for l in tqdm(range(NUM_LAYERS), desc="Finalizing Layer Components"):
-            # Attention Projections
             for n in ["attn_q", "attn_k", "attn_v", "attn_output"]:
                 f.write(fetch_tensor(f"blk.{l}.{n}").astype(np.float32).tobytes())
-            
-            # Router
             f.write(fetch_tensor(f"blk.{l}.ffn_gate_inp").astype(np.float32).tobytes())
-            
-            # Norms (Order: Attn Norm, then FFN Norm)
             f.write(fetch_tensor(f"blk.{l}.attn_norm").astype(np.float32).tobytes())
             f.write(fetch_tensor(f"blk.{l}.ffn_norm").astype(np.float32).tobytes())
 
-        # --- Phase 6 (Separate in load order): LM Head ---
         print("Phase 6: LM Head...")
         f.write(fetch_tensor("output").astype(np.float32).tobytes())
 
-        # --- Phase 8: Final Scales ---
         print("Phase 8: CPU Scales...")
         f.write(np.array(all_cpu_scales, dtype=np.float32).tobytes())
 

@@ -45,9 +45,19 @@ EngineConfig config;
           fprintf(stderr, "[Main] NUMA lock disabled via config; using standard OS scheduling.\n");
           return;
       }
-      SetProcessAffinityMask(GetCurrentProcess(), 0x3FFF);  // Cores 0-13 mask
+      
+      DWORD_PTR process_mask, system_mask;
+      if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask)) {
+          // Attempt to lock to system_mask (unlocking all cores for the process first)
+          if (SetProcessAffinityMask(GetCurrentProcess(), system_mask)) {
+              fprintf(stderr, "[Main] Process affinity unlocked to all %llu logical cores.\n", (unsigned long long)system_mask);
+          } else {
+              fprintf(stderr, "[Warning] SetProcessAffinityMask failed (err=%lu).\n", GetLastError());
+          }
+      }
+      
       SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
-      fprintf(stderr, "[Main] Process locked to Node 0, REALTIME priority.\n");
+      fprintf(stderr, "[Main] REALTIME priority set.\n");
   }
 #else
   static void acquire_large_page_privilege() { /* no-op on Linux */ }

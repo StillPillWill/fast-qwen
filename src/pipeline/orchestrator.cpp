@@ -137,11 +137,7 @@ public:
         const float* embed = weights_->embed_table + (size_t)token_id * HIDDEN_DIM;
         memcpy(host_hidden_, embed, HIDDEN_DIM * sizeof(float));
 
-        // Transfer embedding to GPU.
-        CUDA_CHECK(cudaMemcpyAsync(
-            dev_hidden_, host_hidden_, HIDDEN_DIM * sizeof(float),
-            cudaMemcpyHostToDevice, streams_[STREAM_ATTENTION]));
-
+        // Memory is zero-copy mapped; GPU naturally reads updates written by CPU.
         // Iterate over transformer layers.
         for (int layer = 0; layer < NUM_LAYERS; ++layer) {
             run_layer(layer, current_pos, temperature, top_p);
@@ -192,7 +188,7 @@ private:
 
         CUDA_CHECK(cudaHostAlloc(&host_hidden_,
                                   HIDDEN_DIM * sizeof(float),
-                                  cudaHostAllocMapped | cudaHostAllocWriteCombined));
+                                  cudaHostAllocMapped));
         CUDA_CHECK(cudaHostGetDevicePointer((void**)&dev_hidden_, host_hidden_, 0));
 
         CUDA_CHECK(cudaMalloc(&dev_logits_, (size_t)VOCAB_SIZE * sizeof(float)));
@@ -301,25 +297,11 @@ private:
         float ew0 = pinned_router_->expert_weights[0];
         float ew1 = pinned_router_->expert_weights[1];
 
-        // Pivot Fetcher pairs 1 and 2 to the selected expert weights.
-        worker_pool_->prefetch_expert_weights(
-            1,
-            weights_->expert_gate + (layer_off * NUM_EXPERTS + ei0) * shared_expert_bytes_,
-            shared_expert_bytes_, ei0, layer);
-        worker_pool_->prefetch_expert_weights(
-            2,
-            weights_->expert_gate + (layer_off * NUM_EXPERTS + ei1) * shared_expert_bytes_,
-            shared_expert_bytes_, ei1, layer);
-
-        worker_pool_->wait(0);
-
         ExpertWeights re0, re1;
         re0.gate_proj  = weights_->expert_gate + (layer_off * NUM_EXPERTS + ei0) * shared_expert_bytes_;
         re0.up_proj    = weights_->expert_up   + (layer_off * NUM_EXPERTS + ei0) * shared_expert_bytes_;
         re0.down_proj  = weights_->expert_down + (layer_off * NUM_EXPERTS + ei0) * down_expert_bytes_;
         
-        // Routed expert scales are packed after the shared expert scales
-        // Order: gate[experts], up[experts], down[experts] for each layer
         size_t experts_start = 3 * NUM_LAYERS;
         re0.gate_scale = weights_->cpu_scales[experts_start + 0 * (NUM_LAYERS * NUM_EXPERTS) + layer * NUM_EXPERTS + ei0];
         re0.up_scale   = weights_->cpu_scales[experts_start + 1 * (NUM_LAYERS * NUM_EXPERTS) + layer * NUM_EXPERTS + ei0];
@@ -336,17 +318,41 @@ private:
         re1.rms_eps    = 1e-6f;
         memcpy(re1.rms_weight, weights_->ffn_norm + layer_off * HIDDEN_DIM, HIDDEN_DIM * sizeof(float));
 
-        worker_pool_->submit(1, [this, h, &re0]() {
-            fused_shared_expert_init(&re0);
+        // Pivot Fetchers for routed experts (Gate, Up, and Down)
+        worker_pool_->prefetch_expert_weights(1, re0.gate_proj, shared_expert_bytes_, ProjType::GATE, ei0, layer);
+        worker_pool_->prefetch_expert_weights(1, re0.up_proj,   shared_expert_bytes_, ProjType::UP,   ei0, layer);
+        worker_pool_->prefetch_expert_weights(1, re0.down_proj, down_expert_bytes_,   ProjType::DOWN, ei0, layer);
+        
+        worker_pool_->prefetch_expert_weights(2, re1.gate_proj, shared_expert_bytes_, ProjType::GATE, ei1, layer);
+        worker_pool_->prefetch_expert_weights(2, re1.up_proj,   shared_expert_bytes_, ProjType::UP,   ei1, layer);
+        worker_pool_->prefetch_expert_weights(2, re1.down_proj, down_expert_bytes_,   ProjType::DOWN, ei1, layer);
+
+        worker_pool_->wait(0);
+
+        worker_pool_->submit(1, [this, h, re0, pair_id=1]() {
+            WeightTile tile;
+            ExpertWeights local_w = re0;
+            // Pull 3 tiles from ring (Gate, Up, Down)
+            for (int i = 0; i < 3; ++i) {
+                while (!worker_pool_->poll_tile(pair_id, tile)) _mm_pause();
+                if (tile.type == ProjType::GATE) local_w.gate_proj = tile.ptr;
+                else if (tile.type == ProjType::UP) local_w.up_proj = tile.ptr;
+                else if (tile.type == ProjType::DOWN) local_w.down_proj = tile.ptr;
+            }
+            fused_shared_expert_init(&local_w);
             fused_shared_expert_forward(h, &expert_scratch_[1], false);
-            WeightTile dummy; 
-            while(worker_pool_->poll_tile(1, dummy)) {} // Clear consumed tiles
         });
-        worker_pool_->submit(2,[this, h, &re1]() {
-            fused_shared_expert_init(&re1);
+        worker_pool_->submit(2, [this, h, re1, pair_id=2]() {
+            WeightTile tile;
+            ExpertWeights local_w = re1;
+            for (int i = 0; i < 3; ++i) {
+                while (!worker_pool_->poll_tile(pair_id, tile)) _mm_pause();
+                if (tile.type == ProjType::GATE) local_w.gate_proj = tile.ptr;
+                else if (tile.type == ProjType::UP) local_w.up_proj = tile.ptr;
+                else if (tile.type == ProjType::DOWN) local_w.down_proj = tile.ptr;
+            }
+            fused_shared_expert_init(&local_w);
             fused_shared_expert_forward(h, &expert_scratch_[2], false);
-            WeightTile dummy; 
-            while(worker_pool_->poll_tile(2, dummy)) {} // Clear consumed tiles
         });
         worker_pool_->wait(1);
         worker_pool_->wait(2);
@@ -392,9 +398,7 @@ private:
             _mm256_storeu_ps(host_hidden_ + d, _mm256_add_ps(vh, va));
         }
 
-        CUDA_CHECK(cudaMemcpyAsync(
-            dev_hidden_, host_hidden_, HIDDEN_DIM * sizeof(float),
-            cudaMemcpyHostToDevice, streams_[STREAM_ATTENTION]));
+        // Memory is zero-copy mapped; GPU naturally reads updates written by CPU.
         CUDA_CHECK(cudaStreamSynchronize(streams_[STREAM_ATTENTION]));
 
         if (layer == NUM_LAYERS - 1) {

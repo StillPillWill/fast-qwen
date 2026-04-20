@@ -172,7 +172,7 @@ private:
     void setup_pinned_buffers() {
         CUDA_CHECK(cudaHostAlloc(&pinned_router_,
                                   sizeof(RouterResult),
-                                  cudaHostAllocMapped | cudaHostAllocWriteCombined));
+                                  cudaHostAllocMapped));
         memset(pinned_router_, 0, sizeof(RouterResult));
         CUDA_CHECK(cudaHostGetDevicePointer(
             (void**)&dev_router_idx_, (void*)pinned_router_->expert_indices, 0));

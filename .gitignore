@@ -1,0 +1,6 @@
+*.exe
+*.bin
+./build/
+./build_output/
+*.gguf
+*.obj

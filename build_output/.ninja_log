@@ -1,0 +1,15 @@
+# ninja log v6
+34	487	7983363880186272	CMakeFiles/engine.dir/src/cpu/quip_unpack_avx2.cpp.obj	d2dc7478e206e55a
+83	5978	7983322555903336	CMakeFiles/engine.dir/src/cuda/lm_head_gemv.cu.obj	5102277d9dc82961
+37	1396	7983363482766728	CMakeFiles/engine.dir/main.cpp.obj	ad84c8a1ab3a7a99
+71	3803	7983322555782881	CMakeFiles/engine.dir/src/cuda/moe_router_pinned.cu.obj	e912a7bdc099dc1a
+59	3919	7983322555667673	CMakeFiles/engine.dir/src/cuda/fused_attention_rotor.cu.obj	a4173ef7fff76715
+13	7818	7983378019151412	build.ninja	ed847099738bb09b
+5980	6981	7983322614878794	CMakeFiles/engine.dir/cmake_device_link.obj	8c1a1ea46eb96d32
+6982	7887	7983322624894317	engine.exe	556c3212338e9fa
+13	7818	7983378019010947	C:/Users/willi/Downloads/fast/build_output/cmake_install.cmake	ed847099738bb09b
+18	7669	7983378019151412	build.ninja	ed847099738bb09b
+18	7669	7983378019151412	C:/Users/willi/Downloads/fast/build_output/cmake_install.cmake	ed847099738bb09b
+59	645	7983378020549860	CMakeFiles/engine.dir/src/cpu/quip_unpack_avx2.cpp.obj	d2dc7478e206e55a
+47	1378	7983378020429557	CMakeFiles/engine.dir/main.cpp.obj	ad84c8a1ab3a7a99
+48	1340	7983378304619862	CMakeFiles/engine.dir/main.cpp.obj	ad84c8a1ab3a7a99

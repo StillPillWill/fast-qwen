@@ -26,10 +26,10 @@
 #define GUARD_PAGE_BYTES 4096
 #define ROTOR_SEED_DIM 128
 
-struct alignas(16) BlockQ4 {
+struct alignas(64) BlockQ4 {
     float   scale;
     uint8_t qs[32];
-    uint8_t pad[12]; // Pad to 48 bytes for better memory latency
+    uint8_t pad[28]; 
 };
 
 #define LAUNCH_KERNEL(name, grid, block, smem, stream, ...) \
@@ -42,14 +42,13 @@ constexpr int   NUM_EXPERTS         = 256;
 constexpr int   TOP_K_EXPERTS       = 8;
 constexpr int   VOCAB_SIZE          = 248320;
 
-// GGUF SHAPES:
 constexpr int   Q_HEADS             = 64;
 constexpr int   KV_HEADS            = 4;
 constexpr int   HEAD_DIM            = 128;
-constexpr int   OUT_INNER           = 4096;
+constexpr int   OUT_INNER           = 8192; 
 
 constexpr int   MAX_SEQ_LEN         = 8192;
-constexpr int   NUM_WORKER_THREADS  = 28; // 14 physical cores * 2 (HT)
+constexpr int   NUM_WORKER_THREADS  = 24; 
 constexpr int   WORKER_CORE_OFFSET  = 2;
 
 constexpr size_t WEIGHT_POOL_BYTES  = 24ULL * 1024 * 1024 * 1024;
@@ -93,8 +92,7 @@ struct ModelWeights {
     float* embed_table; float* attn_norm; float* ffn_norm; float* final_norm; float* cpu_scales;
     HybridWeights* hw;
     SSMParams* ssm_p;
-    
-    BlockQ4 *Wq, *Wk, *Wv, *Wo; // Global if needed, or per-layer
+    BlockQ4 *Wq, *Wk, *Wv, *Wo; 
 };
 
 struct EngineConfig {
@@ -105,7 +103,13 @@ struct EngineConfig {
 };
 extern EngineConfig config;
 
-struct SiblingWorkItem {
+struct SharedExpertScratch {
+    float* normed_x; float* x_rotated; float* gate_out; float* up_out; float* intermediate; float* down_out; float* y_out; float* ir_rot;
+};
+
+void rmsnorm_avx2(const float* __restrict__ x, const float* __restrict__ gamma, float* __restrict__ y, int dim, float eps);
+
+struct alignas(CACHE_LINE) SiblingWorkItem {
     std::atomic<bool>  ready{false};
     float*             gate_out;
     float*             up_out;
@@ -113,6 +117,7 @@ struct SiblingWorkItem {
     int                row_end;
     const float*       x_rot;
     const ExpertWeights* weights;
+    uint8_t            padding[CACHE_LINE]; 
 };
 extern SiblingWorkItem g_sibling_works[NUM_WORKER_THREADS / 2];
 
@@ -124,3 +129,4 @@ struct FetcherRequest {
     int                   expert_idx;
     int                   layer_idx;
 };
+extern FetcherRequest g_fetch_requests[NUM_WORKER_THREADS / 2];

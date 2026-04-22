@@ -156,13 +156,16 @@ extern "C" __global__ void fused_logit_sampling_kernel(
 
     // ── Stochastic categorical sampling ───────────────────────────────────────
     if (temperature >= 1e-4f) {
-        curandState_t rng; curand_init(rng_seed, tid, 0, &rng);
-        float target = curand_uniform(&rng) * gsum;
+        __shared__ float s_target;
+        if (tid == 0) {
+            curandState_t rng; curand_init(rng_seed, 0, 0, &rng);
+            s_target = curand_uniform(&rng) * gsum;
+        }
+        __syncthreads();
+        float target = s_target;
         
         // Parallel scan to find the token
         __shared__ float s_scan[256];
-        float cum = 0.0f;
-        int found_v = -1;
         
         // This is still somewhat complex to do perfectly in parallel without a full scan
         // A simpler way: each thread computes its local sum of exp(...)

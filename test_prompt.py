@@ -40,8 +40,8 @@ def main():
     stderr_thread.daemon = True
     stderr_thread.start()
     
-    print("Waiting for engine to load model (this may take up to 60 seconds)...")
-    if not ready_event.wait(timeout=120):
+    print("Waiting for engine to load model (this may take up to 1200 seconds)...")
+    if not ready_event.wait(timeout=1200):
         print("Error: Engine timed out during startup.")
         proc.terminate()
         return
@@ -49,41 +49,43 @@ def main():
     prompt = "Hi, can you introduce yourself?"
     print(f"\n\033[92mYou: {prompt}\033[0m")
     
-    tokens = tokenizer.encode(prompt)
+    # Fix: Missing Instruct Chat Template
+    messages = [{"role": "user", "content": prompt}]
+    chat_input = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    tokens = tokenizer.encode(chat_input)
     token_str = " ".join(map(str, tokens)) + " \n"
+    print(f"Sending tokens: {token_str}")
     proc.stdin.write(token_str.encode('utf-8'))
     proc.stdin.flush()
     
     print("\033[96mQwen 3.6: \033[0m", end='', flush=True)
     
     # Read response
+    current_tokens = []
     buffer = ""
     start_time = time.time()
     while True:
+        if proc.poll() is not None: break
+        
         char = proc.stdout.read(1)
-        if not char:
-            break
+        if not char: break
         char = char.decode('utf-8', errors='ignore')
-        if char == ' ':
+        
+        if char == ' ' or char == '\n':
             if buffer:
                 try:
                     token_val = int(buffer)
-                    token_text = tokenizer.decode([token_val])
-                    print(token_text, end='', flush=True)
-                except:
+                    current_tokens.append(token_val)
+                    full_text = tokenizer.decode(current_tokens)
+                    prev_text = tokenizer.decode(current_tokens[:-1]) if len(current_tokens) > 1 else ""
+                    new_text = full_text[len(prev_text):]
+                    print(new_text, end='', flush=True)
+                except ValueError:
                     pass
                 buffer = ""
-            print(" ", end='', flush=True)
-        elif char == '\n':
-            if buffer:
-                try:
-                    token_val = int(buffer)
-                    token_text = tokenizer.decode([token_val])
-                    print(token_text, end='', flush=True)
-                except:
-                    pass
-            print("\n", flush=True)
-            break
+            if char == '\n':
+                print("\n", flush=True)
+                break
         else:
             buffer += char
         

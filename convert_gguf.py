@@ -2,6 +2,7 @@ import numpy as np
 import gguf
 import os
 import json
+import sys
 from tqdm import tqdm
 from numba import njit, prange
 
@@ -14,56 +15,38 @@ VOCAB_SIZE = 248320
 Q_HEADS = 64
 KV_HEADS = 4
 HEAD_DIM = 128
-OUT_INNER = 4096
+OUT_INNER = 8192
 
-@njit(nogil=True, fastmath=True, parallel=True)
-def pack_q4(weights, scale_hint=None):
-    # weights: (rows, cols)
-    rows, cols = weights.shape
-    num_blocks = (rows * cols + 31) // 32
-    # BlockQ4: float scale (4), uint8 qs[32], uint8 pad[12] = 48 bytes
-    packed = np.zeros(num_blocks * 48, dtype=np.uint8)
+def pack_q4(weights):
+    flat_w = weights.flatten()
+    pad_len = (32 - len(flat_w) % 32) % 32
+    if pad_len > 0:
+        flat_w = np.pad(flat_w, (0, pad_len))
     
-    flat_w = weights.ravel()
-    for b in prange(num_blocks):
-        start = b * 32
-        end = min(start + 32, len(flat_w))
-        block = flat_w[start:end]
-        
-        max_v = 0.0
-        for i in range(len(block)):
-            av = abs(block[i])
-            if av > max_v: max_v = av
-        
-        scale = max_v / 7.5
-        if scale == 0: scale = 1.0
-        
-        # Write scale (float32, little endian)
-        s_bytes = np.array([scale], dtype=np.float32).view(np.uint8)
-        for i in range(4):
-            packed[b * 48 + i] = s_bytes[i]
-            
-        # Write 4-bit weights
-        iscale = 1.0 / scale
-        for i in range(len(block)):
-            val = int(round(block[i] * iscale + 8.0))
-            if val < 0: val = 0
-            if val > 15: val = 15
-            packed[b * 48 + 4 + i] = val # Store one 4-bit val per byte for simplicity in kernel
-            # Actually BlockQ4.qs is uint8[32]. 
-            # The kernel does: (blk.qs[i] & 0xF) - 8.
-            # So one nibble per byte is fine if we only use 32 bytes for 32 weights.
-            
-        # Padding is already zero
-    return packed
+    blocks = flat_w.reshape(-1, 32)
+    max_v = np.max(np.abs(blocks), axis=1)
+    scale = max_v / 7.5
+    scale[scale == 0.0] = 1.0
+    scale = scale.astype(np.float32)
+    
+    packed = np.zeros((len(blocks), 64), dtype=np.uint8)
+    packed[:, 0:4] = scale.view(np.uint8).reshape(-1, 4)
+    
+    iscale = 1.0 / scale
+    quantized = np.round(blocks * iscale[:, None] + 8.0).astype(np.int32)
+    quantized = np.clip(quantized, 0, 15).astype(np.uint8)
+    packed[:, 4:36] = quantized
+    
+    return packed.flatten()
 
 @njit(nogil=True, fastmath=True, parallel=True)
-def pack_3bit(weights_3d, pitch):
-    num_experts, rows, cols = weights_3d.shape
+def pack_3bit_all_experts(raw_all, pitch):
+    # raw_all: (experts, rows, cols)
+    num_experts, rows, cols = raw_all.shape
     packed_out = np.zeros((num_experts, rows, pitch), dtype=np.uint8)
-    scales_out = np.zeros(num_experts, dtype=np.float32)
+    scales = np.zeros(num_experts, dtype=np.float32)
     for e in prange(num_experts):
-        raw = weights_3d[e]
+        raw = raw_all[e]
         max_v = 0.0
         for r in range(rows):
             for c in range(cols):
@@ -71,32 +54,26 @@ def pack_3bit(weights_3d, pitch):
                 if av > max_v: max_v = av
         scale = max_v / 3.5
         if scale == 0: scale = 1.0
-        scales_out[e] = np.float32(scale)
+        scales[e] = np.float32(scale)
         iscale = 1.0 / scale
         for r in range(rows):
             for cg in range(cols // 8):
                 v32 = np.uint32(0)
                 for i in range(8):
                     idx = int(round((raw[r, cg * 8 + i] * iscale) + 3.5))
-                    if idx < 0: idx = 0
-                    if idx > 7: idx = 7
-                    # Pack as [w0, w1, ..., w7] where w0 is at bits 21-23
-                    v32 |= (np.uint32(idx) << np.uint32(21 - (i * 3)))
+                    v32 |= (np.uint32(max(0, min(7, idx))) << np.uint32(21 - (i * 3)))
                 base = cg * 3
                 packed_out[e, r, base] = v32 & 0xFF
                 packed_out[e, r, base + 1] = (v32 >> 8) & 0xFF
                 packed_out[e, r, base + 2] = (v32 >> 16) & 0xFF
-    return packed_out, scales_out
+    return packed_out, scales
 
 def convert():
     input_path = "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf"
     output_path = "model.bin"
     manifest_path = "model.json"
     
-    if not os.path.exists(input_path):
-        print(f"Error: {input_path} not found.")
-        return
-
+    print(f"Starting conversion of {input_path} (Efficient mode)...", flush=True)
     reader = gguf.GGUFReader(input_path)
     tensor_map = {tensor.name: tensor for tensor in reader.tensors}
     
@@ -105,7 +82,7 @@ def convert():
             t = tensor_map[name]
             data = gguf.quants.dequantize(t.data, t.tensor_type) if t.tensor_type != 0 else t.data.view(np.float32)
             return data.reshape(t.shape[::-1]).astype(np.float32)
-        if f"{name}.weight" in tensor_map:
+        if not name.endswith(".weight") and f"{name}.weight" in tensor_map:
             return fetch_tensor(f"{name}.weight")
         return None
 
@@ -115,91 +92,77 @@ def convert():
     with open(output_path, "wb") as f:
         def write_tensor(name, data):
             nonlocal offset
-            f.write(data.tobytes())
-            manifest["tensors"][name] = {"offset": offset, "size": data.nbytes}
-            offset += data.nbytes
+            if data is None: return
+            buf = data.tobytes()
+            f.write(buf)
+            manifest["tensors"][name] = {"offset": offset, "size": len(buf)}
+            offset += len(buf)
+            print(f"Wrote {name} ({len(buf)} bytes)", flush=True)
 
         all_cpu_scales = []
-        
-        # 1. Shared Experts (3-bit)
         expert_pitch = (HIDDEN_DIM * 3 // 8 + 31) & ~31
         down_pitch = (FFN_INTERMEDIATE * 3 // 8 + 31) & ~31
         
-        for s in ["ffn_gate_shexp", "ffn_up_shexp"]:
-            data = []
+        # 1. Shared Experts (Blob per type)
+        for s in ["ffn_gate_shexp", "ffn_up_shexp", "ffn_down_shexp"]:
+            pitch = expert_pitch if "down" not in s else down_pitch
+            blob = []
             for l in range(NUM_LAYERS):
                 w = fetch_tensor(f"blk.{l}.{s}")
-                p, sc = pack_3bit(w.reshape(1, w.shape[0], w.shape[1]), expert_pitch)
-                data.append(p)
-                all_cpu_scales.extend(sc.tolist())
-            write_tensor(s, np.concatenate(data))
-            
-        data = []
-        for l in range(NUM_LAYERS):
-            w = fetch_tensor(f"blk.{l}.ffn_down_shexp")
-            p, sc = pack_3bit(w.reshape(1, w.shape[0], w.shape[1]), down_pitch)
-            data.append(p)
-            all_cpu_scales.extend(sc.tolist())
-        write_tensor("ffn_down_shexp", np.concatenate(data))
+                if w is not None:
+                    packed, sc = pack_3bit_all_experts(w.reshape(1, w.shape[0], w.shape[1]), pitch)
+                    blob.append(packed)
+                    all_cpu_scales.extend(sc.tolist())
+            if blob: write_tensor(s, np.concatenate(blob))
 
-        # 2. Routed Experts (3-bit)
-        for s in ["ffn_gate_exps", "ffn_up_exps"]:
-            data = []
+        # 2. Routed Experts (Blob per type)
+        for s in ["ffn_gate_exps", "ffn_up_exps", "ffn_down_exps"]:
+            pitch = expert_pitch if "down" not in s else down_pitch
+            blob = []
             for l in range(NUM_LAYERS):
-                w = fetch_tensor(f"blk.{l}.{s}") # (experts, intermediate, hidden)
-                p, sc = pack_3bit(w, expert_pitch)
-                data.append(p)
-                all_cpu_scales.extend(sc.tolist())
-            write_tensor(s, np.concatenate(data))
-            
-        data = []
-        for l in range(NUM_LAYERS):
-            w = fetch_tensor(f"blk.{l}.ffn_down_exps")
-            p, sc = pack_3bit(w, down_pitch)
-            data.append(p)
-            all_cpu_scales.extend(sc.tolist())
-        write_tensor("ffn_down_exps", np.concatenate(data))
+                w = fetch_tensor(f"blk.{l}.{s}")
+                if w is not None:
+                    packed, sc = pack_3bit_all_experts(w, pitch)
+                    blob.append(packed)
+                    all_cpu_scales.extend(sc.tolist())
+            if blob: write_tensor(s, np.concatenate(blob))
 
-        # 3. Embeddings (FP32)
         write_tensor("token_embd", fetch_tensor("token_embd"))
 
-        # 4. Attention/SSM weights (Q4)
-        for l in tqdm(range(NUM_LAYERS), desc="Processing Layers"):
-            if l % 4 != 3: # SSM
-                qkv = fetch_tensor(f"blk.{l}.attn_qkv")
-                write_tensor(f"blk.{l}.attn_qkv", pack_q4(qkv))
-                gate = fetch_tensor(f"blk.{l}.attn_gate")
-                write_tensor(f"blk.{l}.attn_gate", pack_q4(gate))
-                out = fetch_tensor(f"blk.{l}.ssm_out")
-                write_tensor(f"blk.{l}.ssm_out", pack_q4(out))
-            else: # Attention
+        print("Processing Q4 layers...", flush=True)
+        for l in tqdm(range(NUM_LAYERS)):
+            if l % 4 != 3:
+                for s in ["attn_qkv", "attn_gate", "ssm_out"]:
+                    w = fetch_tensor(f"blk.{l}.{s}")
+                    if w is not None: write_tensor(f"blk.{l}.{s}", pack_q4(w))
+            else:
                 for s in ["attn_q", "attn_k", "attn_v", "attn_output"]:
                     w = fetch_tensor(f"blk.{l}.{s}")
-                    write_tensor(f"blk.{l}.{s}", pack_q4(w))
+                    if w is not None: write_tensor(f"blk.{l}.{s}", pack_q4(w))
 
-        # 5. Router weights (FP32)
-        data = []
+        # 3. Router and Norms
+        router_blob = []
         for l in range(NUM_LAYERS):
-            data.append(fetch_tensor(f"blk.{l}.ffn_gate_inp"))
-        write_tensor("router_weights", np.concatenate(data))
+            w = fetch_tensor(f"blk.{l}.ffn_gate_inp")
+            if w is not None: router_blob.append(w)
+        if router_blob: write_tensor("router_weights", np.concatenate(router_blob))
 
-        # 6. LM Head (FP32)
         write_tensor("output", fetch_tensor("output"))
 
-        # 7. Norms (FP32)
-        data_attn = []
-        data_ffn = []
+        attn_norms = []
+        ffn_norms = []
         for l in range(NUM_LAYERS):
-            data_attn.append(fetch_tensor(f"blk.{l}.attn_norm"))
-            data_ffn.append(fetch_tensor(f"blk.{l}.post_attention_norm"))
-        write_tensor("attn_norms", np.concatenate(data_attn))
-        write_tensor("ffn_norms", np.concatenate(data_ffn))
+            wa = fetch_tensor(f"blk.{l}.attn_norm")
+            if wa is not None: attn_norms.append(wa)
+            wf = fetch_tensor(f"blk.{l}.post_attention_norm")
+            if wf is not None: ffn_norms.append(wf)
+        
+        if attn_norms: write_tensor("attn_norms", np.concatenate(attn_norms))
+        if ffn_norms: write_tensor("ffn_norms", np.concatenate(ffn_norms))
         write_tensor("output_norm", fetch_tensor("output_norm"))
+        if all_cpu_scales: write_tensor("scales", np.array(all_cpu_scales, dtype=np.float32))
 
-        # 8. Scales (FP32)
-        write_tensor("scales", np.array(all_cpu_scales, dtype=np.float32))
-
-        # 9. SSM Params (FP32)
+        # 4. SSM Params
         for l in range(NUM_LAYERS):
             if l % 4 != 3:
                 for s in ["ssm_a", "ssm_alpha", "ssm_beta", "ssm_dt", "ssm_conv1d", "ssm_norm"]:
@@ -207,8 +170,7 @@ def convert():
 
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
-
-    print(f"SUCCESS: {output_path} and {manifest_path} created.")
+    print(f"SUCCESS: {output_path} created.", flush=True)
 
 if __name__ == "__main__":
     convert()

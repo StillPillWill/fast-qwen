@@ -4,11 +4,10 @@
 
 #include "../../include/common.h"
 #include <thread>
-#include <array>
 #include <atomic>
 #include <vector>
-#include <functional>
 #include <immintrin.h>
+#include <functional>
 
 #ifdef _WIN32
   #include <windows.h>
@@ -16,32 +15,49 @@
   #include <pthread.h>
 #endif
 
-template<typename T, size_t CAP>
-class SPSCRing {
-public:
-    void push(const T& val) { while (size() >= CAP - 1) _mm_pause(); buf_[head_.load(std::memory_order_relaxed) % CAP] = val; head_.fetch_add(1, std::memory_order_release); }
-    bool try_pop(T& out) { size_t h = head_.load(std::memory_order_acquire), t = tail_.load(std::memory_order_relaxed); if (h == t) return false; out = buf_[t % CAP]; tail_.store(t + 1, std::memory_order_release); return true; }
-    size_t size() const { return head_.load(std::memory_order_acquire) - tail_.load(std::memory_order_acquire); }
-private:
-    ENGINE_ALIGN(CACHE_LINE) std::atomic<size_t> head_{0};
-    ENGINE_ALIGN(CACHE_LINE) std::atomic<size_t> tail_{0};
-    T buf_[CAP];
+template<typename T, size_t N>
+struct SPSCRing {
+    T        buf[N];
+    alignas(64) std::atomic<size_t> head{0};
+    alignas(64) std::atomic<size_t> tail{0};
+    bool push(const T& val) {
+        size_t h = head.load(std::memory_order_relaxed);
+        if (h - tail.load(std::memory_order_acquire) == N) return false;
+        buf[h % N] = val; head.store(h + 1, std::memory_order_release);
+        return true;
+    }
+    bool try_pop(T& out) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        if (t == head.load(std::memory_order_acquire)) return false;
+        out = buf[t % N]; tail.store(t + 1, std::memory_order_release);
+        return true;
+    }
 };
 
-struct WorkerState { std::atomic<bool> should_exit{false}; std::atomic<bool> has_work{false}; std::function<void()> work; SPSCRing<WeightTile, 4> tile_ring; };
-static WorkerState g_workers[NUM_WORKER_THREADS];
-static FetcherRequest g_fetch_requests[NUM_WORKER_THREADS / 2];
-ENGINE_ALIGN(CACHE_LINE) SiblingWorkItem g_sibling_works[NUM_WORKER_THREADS / 2];
+struct WorkerState {
+    std::atomic<bool>     has_work{false};
+    std::atomic<bool>     should_exit{false};
+    std::function<void()> work;
+    SPSCRing<WeightTile, 1> tile_ring; 
+};
 
-extern void quip_matmul_fused(const uint8_t* __restrict__, const float* __restrict__, float* __restrict__, float, int, int);
+static WorkerState     g_workers[NUM_WORKER_THREADS];
+static FetcherRequest  g_fetch_requests[NUM_WORKER_THREADS / 2];
+SiblingWorkItem g_sibling_works[NUM_WORKER_THREADS / 2];
 
 static void pin_thread_to_core(int id) {
-    if (!config.enable_numa_lock) return;
-    int pid = id / 2, isb = id % 2, core = WORKER_CORE_OFFSET + pid + (isb ? 14 : 0);
+    int pid = id / 2;
+    int isb = id % 2;
+    int core = 2 + pid + (isb ? 14 : 0);
 #ifdef _WIN32
-    if (!SetThreadAffinityMask(GetCurrentThread(), 1ULL << core)) config.enable_numa_lock = false;
+    SetThreadAffinityMask(GetCurrentThread(), 1ULL << core);
+#else
+    cpu_set_t cpuset; CPU_ZERO(&cpuset); CPU_SET(core, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 #endif
 }
+
+extern void quip_matmul_fused(const uint8_t* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, float row_scale, int rows, int cols);
 
 static void worker_a_func(int id) {
     pin_thread_to_core(id); WorkerState& s = g_workers[id];
@@ -55,9 +71,10 @@ static void worker_a_func(int id) {
             s.has_work.store(false, std::memory_order_release); 
         }
         if (sw.ready.load(std::memory_order_acquire)) {
-            const ExpertWeights* W = sw.weights; int rs = sw.row_start, re = sw.row_end; size_t p = (HIDDEN_DIM * 3 / 8 + 31) & ~31;
-            quip_matmul_fused(W->gate_proj + (size_t)rs * p, sw.x_rot, sw.gate_out + rs, W->gate_scale, re - rs, HIDDEN_DIM);
-            quip_matmul_fused(W->up_proj + (size_t)rs * p, sw.x_rot, sw.up_out + rs, W->up_scale, re - rs, HIDDEN_DIM);
+            const ExpertWeights* W = sw.weights; int rs = sw.row_start, re = sw.row_end; 
+            size_t pitch = (HIDDEN_DIM * 3 / 8 + 31) & ~31;
+            quip_matmul_fused(W->gate_proj + (size_t)rs * pitch, sw.x_rot, sw.gate_out + rs, W->gate_scale, re - rs, HIDDEN_DIM);
+            quip_matmul_fused(W->up_proj + (size_t)rs * pitch, sw.x_rot, sw.up_out + rs, W->up_scale, re - rs, HIDDEN_DIM);
             sw.ready.store(false, std::memory_order_release);
         }
         _mm_pause();
@@ -66,15 +83,14 @@ static void worker_a_func(int id) {
 
 static void worker_b_func(int id) {
     pin_thread_to_core(id); int pid = id / 2; FetcherRequest& req = g_fetch_requests[pid]; 
-    SPSCRing<WeightTile, 4>& ring = g_workers[id - 1].tile_ring; WorkerState& s = g_workers[id];
+    SPSCRing<WeightTile, 1>& ring = g_workers[id - 1].tile_ring; WorkerState& s = g_workers[id];
     while (!s.should_exit.load(std::memory_order_relaxed)) {
         if (req.active.load(std::memory_order_acquire)) {
             const uint8_t* p = req.base_ptr; size_t rem = req.total_bytes;
             while (rem > 0 && !s.should_exit.load(std::memory_order_relaxed)) {
                 size_t tb = (rem < L3_TILE_BYTES) ? rem : L3_TILE_BYTES;
-                // Use NTA hint to avoid blowing out L2 cache (Broadwell L2 is only 256KB)
-                for (size_t o = 0; o < tb; o += CACHE_LINE) _mm_prefetch((const char*)(p + o), _MM_HINT_NTA);
-                ring.push({p, req.type, req.expert_idx, req.layer_idx, tb});
+                for (size_t i = 0; i < tb; i += 64) _mm_prefetch((const char*)p + i, _MM_HINT_T0);
+                while(!ring.push({p, req.type, req.expert_idx, req.layer_idx, tb})) { _mm_pause(); }
                 p += tb; rem -= tb;
             }
             req.active.store(false, std::memory_order_release);
@@ -85,15 +101,29 @@ static void worker_b_func(int id) {
 
 class WorkerPool {
 public:
-    WorkerPool() { for (int i = 0; i < NUM_WORKER_THREADS; ++i) threads_[i] = std::thread((i % 2 == 0) ? worker_a_func : worker_b_func, i); }
-    ~WorkerPool() { for (int i = 0; i < NUM_WORKER_THREADS; ++i) g_workers[i].should_exit = true; for (int i = 0; i < NUM_WORKER_THREADS; ++i) threads_[i].join(); }
-    void submit(int pid, std::function<void()> f) { WorkerState& s = g_workers[pid * 2]; while (s.has_work.load(std::memory_order_relaxed)) _mm_pause(); s.work = f; s.has_work.store(true, std::memory_order_release); }
-    void wait(int pid) { while (g_workers[pid * 2].has_work.load(std::memory_order_acquire)) _mm_pause(); }
-    void prefetch_expert_weights(int pid, const uint8_t* p, size_t b, ProjType t, int ei, int li) {
-        FetcherRequest& req = g_fetch_requests[pid]; while (req.active.load(std::memory_order_relaxed)) _mm_pause();
-        req.base_ptr = p; req.total_bytes = b; req.type = t; req.expert_idx = ei; req.layer_idx = li; req.active.store(true, std::memory_order_release);
+    WorkerPool() {
+        for (int i = 0; i < NUM_WORKER_THREADS; ++i) {
+            if (i % 2 == 0) threads_[i] = std::thread(worker_a_func, i);
+            else threads_[i] = std::thread(worker_b_func, i);
+        }
     }
-    bool poll_tile(int pid, WeightTile& out) { return g_workers[pid * 2].tile_ring.try_pop(out); }
+    ~WorkerPool() {
+        for (int i = 0; i < NUM_WORKER_THREADS; ++i) g_workers[i].should_exit.store(true, std::memory_order_relaxed);
+        for (int i = 0; i < NUM_WORKER_THREADS; ++i) if (threads_[i].joinable()) threads_[i].join();
+    }
+    void submit(int pid, std::function<void()> work) {
+        g_workers[pid].work = std::move(work); 
+        g_workers[pid].has_work.store(true, std::memory_order_release);
+    }
+    void wait(int pid) { while (g_workers[pid].has_work.load(std::memory_order_acquire)) _mm_pause(); }
+    
+    void prefetch_expert_weights(int pid, const uint8_t* ptr, size_t bytes, ProjType type, int ei, int li) {
+        FetcherRequest& req = g_fetch_requests[pid / 2];
+        while (req.active.load(std::memory_order_acquire)) _mm_pause();
+        req.base_ptr = ptr; req.total_bytes = bytes; req.type = type; req.expert_idx = ei; req.layer_idx = li;
+        req.active.store(true, std::memory_order_release);
+    }
+    bool poll_tile(int pid, WeightTile& out) { return g_workers[pid].tile_ring.try_pop(out); }
 private:
     std::thread threads_[NUM_WORKER_THREADS];
 };

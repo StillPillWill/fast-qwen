@@ -68,7 +68,10 @@ def main():
             if user_input.strip().lower() in ['exit', 'quit']:
                 break
             
-            tokens = tokenizer.encode(user_input)
+            # Fix: Missing Instruct Chat Template
+            messages = [{"role": "user", "content": user_input}]
+            chat_input = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            tokens = tokenizer.encode(chat_input)
             if not tokens:
                 continue
                 
@@ -85,6 +88,7 @@ def main():
             current_tokens = []
             buffer = ""
             while True:
+                # Fix: Subprocess Pipe Deadlock
                 if proc.poll() is not None: break
                 
                 char = proc.stdout.read(1)

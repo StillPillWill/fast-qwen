@@ -20,7 +20,7 @@ NVCC = "nvcc.exe"
 INC = f"-I. -Iinclude"
 
 # MSVC Flags - C++17 is required for these kernels
-CL_FLAGS = "/nologo /EHsc /std:c++17 /W3 /D_ALLOW_MSC_VER_MISMATCH /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS"
+CL_FLAGS = "/nologo /EHsc /std:c++17 /W3 /arch:AVX2 /D_ALLOW_MSC_VER_MISMATCH /DNOMINMAX /D_CRT_SECURE_NO_WARNINGS"
 
 # NVCC Flags - Optimized for your GTX 1080 (Pascal / sm_61)
 NVCC_FLAGS = f"-O2 -m 64 -arch=sm_61 -std=c++17 --expt-relaxed-constexpr --expt-extended-lambda --use_fast_math {INC} -Xcompiler \"{CL_FLAGS}\""

@@ -1,0 +1,1176 @@
+{
+  "tensors": {
+    "ffn_gate_shexp": {
+      "offset": 0,
+      "size": 15728640
+    },
+    "ffn_up_shexp": {
+      "offset": 15728640,
+      "size": 15728640
+    },
+    "ffn_down_shexp": {
+      "offset": 31457280,
+      "size": 15728640
+    },
+    "ffn_gate_exps": {
+      "offset": 47185920,
+      "size": 4026531840
+    },
+    "ffn_up_exps": {
+      "offset": 4073717760,
+      "size": 4026531840
+    },
+    "ffn_down_exps": {
+      "offset": 8100249600,
+      "size": 4026531840
+    },
+    "token_embd": {
+      "offset": 12126781440,
+      "size": 2034237440
+    },
+    "blk.0.attn_qkv": {
+      "offset": 14161018880,
+      "size": 33554432
+    },
+    "blk.0.attn_gate": {
+      "offset": 14194573312,
+      "size": 16777216
+    },
+    "blk.0.ssm_out": {
+      "offset": 14211350528,
+      "size": 16777216
+    },
+    "blk.1.attn_qkv": {
+      "offset": 14228127744,
+      "size": 33554432
+    },
+    "blk.1.attn_gate": {
+      "offset": 14261682176,
+      "size": 16777216
+    },
+    "blk.1.ssm_out": {
+      "offset": 14278459392,
+      "size": 16777216
+    },
+    "blk.2.attn_qkv": {
+      "offset": 14295236608,
+      "size": 33554432
+    },
+    "blk.2.attn_gate": {
+      "offset": 14328791040,
+      "size": 16777216
+    },
+    "blk.2.ssm_out": {
+      "offset": 14345568256,
+      "size": 16777216
+    },
+    "blk.3.attn_q": {
+      "offset": 14362345472,
+      "size": 33554432
+    },
+    "blk.3.attn_k": {
+      "offset": 14395899904,
+      "size": 2097152
+    },
+    "blk.3.attn_v": {
+      "offset": 14397997056,
+      "size": 2097152
+    },
+    "blk.3.attn_output": {
+      "offset": 14400094208,
+      "size": 16777216
+    },
+    "blk.4.attn_qkv": {
+      "offset": 14416871424,
+      "size": 33554432
+    },
+    "blk.4.attn_gate": {
+      "offset": 14450425856,
+      "size": 16777216
+    },
+    "blk.4.ssm_out": {
+      "offset": 14467203072,
+      "size": 16777216
+    },
+    "blk.5.attn_qkv": {
+      "offset": 14483980288,
+      "size": 33554432
+    },
+    "blk.5.attn_gate": {
+      "offset": 14517534720,
+      "size": 16777216
+    },
+    "blk.5.ssm_out": {
+      "offset": 14534311936,
+      "size": 16777216
+    },
+    "blk.6.attn_qkv": {
+      "offset": 14551089152,
+      "size": 33554432
+    },
+    "blk.6.attn_gate": {
+      "offset": 14584643584,
+      "size": 16777216
+    },
+    "blk.6.ssm_out": {
+      "offset": 14601420800,
+      "size": 16777216
+    },
+    "blk.7.attn_q": {
+      "offset": 14618198016,
+      "size": 33554432
+    },
+    "blk.7.attn_k": {
+      "offset": 14651752448,
+      "size": 2097152
+    },
+    "blk.7.attn_v": {
+      "offset": 14653849600,
+      "size": 2097152
+    },
+    "blk.7.attn_output": {
+      "offset": 14655946752,
+      "size": 16777216
+    },
+    "blk.8.attn_qkv": {
+      "offset": 14672723968,
+      "size": 33554432
+    },
+    "blk.8.attn_gate": {
+      "offset": 14706278400,
+      "size": 16777216
+    },
+    "blk.8.ssm_out": {
+      "offset": 14723055616,
+      "size": 16777216
+    },
+    "blk.9.attn_qkv": {
+      "offset": 14739832832,
+      "size": 33554432
+    },
+    "blk.9.attn_gate": {
+      "offset": 14773387264,
+      "size": 16777216
+    },
+    "blk.9.ssm_out": {
+      "offset": 14790164480,
+      "size": 16777216
+    },
+    "blk.10.attn_qkv": {
+      "offset": 14806941696,
+      "size": 33554432
+    },
+    "blk.10.attn_gate": {
+      "offset": 14840496128,
+      "size": 16777216
+    },
+    "blk.10.ssm_out": {
+      "offset": 14857273344,
+      "size": 16777216
+    },
+    "blk.11.attn_q": {
+      "offset": 14874050560,
+      "size": 33554432
+    },
+    "blk.11.attn_k": {
+      "offset": 14907604992,
+      "size": 2097152
+    },
+    "blk.11.attn_v": {
+      "offset": 14909702144,
+      "size": 2097152
+    },
+    "blk.11.attn_output": {
+      "offset": 14911799296,
+      "size": 16777216
+    },
+    "blk.12.attn_qkv": {
+      "offset": 14928576512,
+      "size": 33554432
+    },
+    "blk.12.attn_gate": {
+      "offset": 14962130944,
+      "size": 16777216
+    },
+    "blk.12.ssm_out": {
+      "offset": 14978908160,
+      "size": 16777216
+    },
+    "blk.13.attn_qkv": {
+      "offset": 14995685376,
+      "size": 33554432
+    },
+    "blk.13.attn_gate": {
+      "offset": 15029239808,
+      "size": 16777216
+    },
+    "blk.13.ssm_out": {
+      "offset": 15046017024,
+      "size": 16777216
+    },
+    "blk.14.attn_qkv": {
+      "offset": 15062794240,
+      "size": 33554432
+    },
+    "blk.14.attn_gate": {
+      "offset": 15096348672,
+      "size": 16777216
+    },
+    "blk.14.ssm_out": {
+      "offset": 15113125888,
+      "size": 16777216
+    },
+    "blk.15.attn_q": {
+      "offset": 15129903104,
+      "size": 33554432
+    },
+    "blk.15.attn_k": {
+      "offset": 15163457536,
+      "size": 2097152
+    },
+    "blk.15.attn_v": {
+      "offset": 15165554688,
+      "size": 2097152
+    },
+    "blk.15.attn_output": {
+      "offset": 15167651840,
+      "size": 16777216
+    },
+    "blk.16.attn_qkv": {
+      "offset": 15184429056,
+      "size": 33554432
+    },
+    "blk.16.attn_gate": {
+      "offset": 15217983488,
+      "size": 16777216
+    },
+    "blk.16.ssm_out": {
+      "offset": 15234760704,
+      "size": 16777216
+    },
+    "blk.17.attn_qkv": {
+      "offset": 15251537920,
+      "size": 33554432
+    },
+    "blk.17.attn_gate": {
+      "offset": 15285092352,
+      "size": 16777216
+    },
+    "blk.17.ssm_out": {
+      "offset": 15301869568,
+      "size": 16777216
+    },
+    "blk.18.attn_qkv": {
+      "offset": 15318646784,
+      "size": 33554432
+    },
+    "blk.18.attn_gate": {
+      "offset": 15352201216,
+      "size": 16777216
+    },
+    "blk.18.ssm_out": {
+      "offset": 15368978432,
+      "size": 16777216
+    },
+    "blk.19.attn_q": {
+      "offset": 15385755648,
+      "size": 33554432
+    },
+    "blk.19.attn_k": {
+      "offset": 15419310080,
+      "size": 2097152
+    },
+    "blk.19.attn_v": {
+      "offset": 15421407232,
+      "size": 2097152
+    },
+    "blk.19.attn_output": {
+      "offset": 15423504384,
+      "size": 16777216
+    },
+    "blk.20.attn_qkv": {
+      "offset": 15440281600,
+      "size": 33554432
+    },
+    "blk.20.attn_gate": {
+      "offset": 15473836032,
+      "size": 16777216
+    },
+    "blk.20.ssm_out": {
+      "offset": 15490613248,
+      "size": 16777216
+    },
+    "blk.21.attn_qkv": {
+      "offset": 15507390464,
+      "size": 33554432
+    },
+    "blk.21.attn_gate": {
+      "offset": 15540944896,
+      "size": 16777216
+    },
+    "blk.21.ssm_out": {
+      "offset": 15557722112,
+      "size": 16777216
+    },
+    "blk.22.attn_qkv": {
+      "offset": 15574499328,
+      "size": 33554432
+    },
+    "blk.22.attn_gate": {
+      "offset": 15608053760,
+      "size": 16777216
+    },
+    "blk.22.ssm_out": {
+      "offset": 15624830976,
+      "size": 16777216
+    },
+    "blk.23.attn_q": {
+      "offset": 15641608192,
+      "size": 33554432
+    },
+    "blk.23.attn_k": {
+      "offset": 15675162624,
+      "size": 2097152
+    },
+    "blk.23.attn_v": {
+      "offset": 15677259776,
+      "size": 2097152
+    },
+    "blk.23.attn_output": {
+      "offset": 15679356928,
+      "size": 16777216
+    },
+    "blk.24.attn_qkv": {
+      "offset": 15696134144,
+      "size": 33554432
+    },
+    "blk.24.attn_gate": {
+      "offset": 15729688576,
+      "size": 16777216
+    },
+    "blk.24.ssm_out": {
+      "offset": 15746465792,
+      "size": 16777216
+    },
+    "blk.25.attn_qkv": {
+      "offset": 15763243008,
+      "size": 33554432
+    },
+    "blk.25.attn_gate": {
+      "offset": 15796797440,
+      "size": 16777216
+    },
+    "blk.25.ssm_out": {
+      "offset": 15813574656,
+      "size": 16777216
+    },
+    "blk.26.attn_qkv": {
+      "offset": 15830351872,
+      "size": 33554432
+    },
+    "blk.26.attn_gate": {
+      "offset": 15863906304,
+      "size": 16777216
+    },
+    "blk.26.ssm_out": {
+      "offset": 15880683520,
+      "size": 16777216
+    },
+    "blk.27.attn_q": {
+      "offset": 15897460736,
+      "size": 33554432
+    },
+    "blk.27.attn_k": {
+      "offset": 15931015168,
+      "size": 2097152
+    },
+    "blk.27.attn_v": {
+      "offset": 15933112320,
+      "size": 2097152
+    },
+    "blk.27.attn_output": {
+      "offset": 15935209472,
+      "size": 16777216
+    },
+    "blk.28.attn_qkv": {
+      "offset": 15951986688,
+      "size": 33554432
+    },
+    "blk.28.attn_gate": {
+      "offset": 15985541120,
+      "size": 16777216
+    },
+    "blk.28.ssm_out": {
+      "offset": 16002318336,
+      "size": 16777216
+    },
+    "blk.29.attn_qkv": {
+      "offset": 16019095552,
+      "size": 33554432
+    },
+    "blk.29.attn_gate": {
+      "offset": 16052649984,
+      "size": 16777216
+    },
+    "blk.29.ssm_out": {
+      "offset": 16069427200,
+      "size": 16777216
+    },
+    "blk.30.attn_qkv": {
+      "offset": 16086204416,
+      "size": 33554432
+    },
+    "blk.30.attn_gate": {
+      "offset": 16119758848,
+      "size": 16777216
+    },
+    "blk.30.ssm_out": {
+      "offset": 16136536064,
+      "size": 16777216
+    },
+    "blk.31.attn_q": {
+      "offset": 16153313280,
+      "size": 33554432
+    },
+    "blk.31.attn_k": {
+      "offset": 16186867712,
+      "size": 2097152
+    },
+    "blk.31.attn_v": {
+      "offset": 16188964864,
+      "size": 2097152
+    },
+    "blk.31.attn_output": {
+      "offset": 16191062016,
+      "size": 16777216
+    },
+    "blk.32.attn_qkv": {
+      "offset": 16207839232,
+      "size": 33554432
+    },
+    "blk.32.attn_gate": {
+      "offset": 16241393664,
+      "size": 16777216
+    },
+    "blk.32.ssm_out": {
+      "offset": 16258170880,
+      "size": 16777216
+    },
+    "blk.33.attn_qkv": {
+      "offset": 16274948096,
+      "size": 33554432
+    },
+    "blk.33.attn_gate": {
+      "offset": 16308502528,
+      "size": 16777216
+    },
+    "blk.33.ssm_out": {
+      "offset": 16325279744,
+      "size": 16777216
+    },
+    "blk.34.attn_qkv": {
+      "offset": 16342056960,
+      "size": 33554432
+    },
+    "blk.34.attn_gate": {
+      "offset": 16375611392,
+      "size": 16777216
+    },
+    "blk.34.ssm_out": {
+      "offset": 16392388608,
+      "size": 16777216
+    },
+    "blk.35.attn_q": {
+      "offset": 16409165824,
+      "size": 33554432
+    },
+    "blk.35.attn_k": {
+      "offset": 16442720256,
+      "size": 2097152
+    },
+    "blk.35.attn_v": {
+      "offset": 16444817408,
+      "size": 2097152
+    },
+    "blk.35.attn_output": {
+      "offset": 16446914560,
+      "size": 16777216
+    },
+    "blk.36.attn_qkv": {
+      "offset": 16463691776,
+      "size": 33554432
+    },
+    "blk.36.attn_gate": {
+      "offset": 16497246208,
+      "size": 16777216
+    },
+    "blk.36.ssm_out": {
+      "offset": 16514023424,
+      "size": 16777216
+    },
+    "blk.37.attn_qkv": {
+      "offset": 16530800640,
+      "size": 33554432
+    },
+    "blk.37.attn_gate": {
+      "offset": 16564355072,
+      "size": 16777216
+    },
+    "blk.37.ssm_out": {
+      "offset": 16581132288,
+      "size": 16777216
+    },
+    "blk.38.attn_qkv": {
+      "offset": 16597909504,
+      "size": 33554432
+    },
+    "blk.38.attn_gate": {
+      "offset": 16631463936,
+      "size": 16777216
+    },
+    "blk.38.ssm_out": {
+      "offset": 16648241152,
+      "size": 16777216
+    },
+    "blk.39.attn_q": {
+      "offset": 16665018368,
+      "size": 33554432
+    },
+    "blk.39.attn_k": {
+      "offset": 16698572800,
+      "size": 2097152
+    },
+    "blk.39.attn_v": {
+      "offset": 16700669952,
+      "size": 2097152
+    },
+    "blk.39.attn_output": {
+      "offset": 16702767104,
+      "size": 16777216
+    },
+    "router_weights": {
+      "offset": 16719544320,
+      "size": 83886080
+    },
+    "output": {
+      "offset": 16803430400,
+      "size": 2034237440
+    },
+    "attn_norms": {
+      "offset": 18837667840,
+      "size": 327680
+    },
+    "ffn_norms": {
+      "offset": 18837995520,
+      "size": 327680
+    },
+    "output_norm": {
+      "offset": 18838323200,
+      "size": 8192
+    },
+    "scales": {
+      "offset": 18838331392,
+      "size": 123360
+    },
+    "blk.0.ssm_a": {
+      "offset": 18838454752,
+      "size": 128
+    },
+    "blk.0.ssm_alpha": {
+      "offset": 18838454880,
+      "size": 262144
+    },
+    "blk.0.ssm_beta": {
+      "offset": 18838717024,
+      "size": 262144
+    },
+    "blk.0.ssm_conv1d": {
+      "offset": 18838979168,
+      "size": 131072
+    },
+    "blk.0.ssm_norm": {
+      "offset": 18839110240,
+      "size": 512
+    },
+    "blk.1.ssm_a": {
+      "offset": 18839110752,
+      "size": 128
+    },
+    "blk.1.ssm_alpha": {
+      "offset": 18839110880,
+      "size": 262144
+    },
+    "blk.1.ssm_beta": {
+      "offset": 18839373024,
+      "size": 262144
+    },
+    "blk.1.ssm_conv1d": {
+      "offset": 18839635168,
+      "size": 131072
+    },
+    "blk.1.ssm_norm": {
+      "offset": 18839766240,
+      "size": 512
+    },
+    "blk.2.ssm_a": {
+      "offset": 18839766752,
+      "size": 128
+    },
+    "blk.2.ssm_alpha": {
+      "offset": 18839766880,
+      "size": 262144
+    },
+    "blk.2.ssm_beta": {
+      "offset": 18840029024,
+      "size": 262144
+    },
+    "blk.2.ssm_conv1d": {
+      "offset": 18840291168,
+      "size": 131072
+    },
+    "blk.2.ssm_norm": {
+      "offset": 18840422240,
+      "size": 512
+    },
+    "blk.4.ssm_a": {
+      "offset": 18840422752,
+      "size": 128
+    },
+    "blk.4.ssm_alpha": {
+      "offset": 18840422880,
+      "size": 262144
+    },
+    "blk.4.ssm_beta": {
+      "offset": 18840685024,
+      "size": 262144
+    },
+    "blk.4.ssm_conv1d": {
+      "offset": 18840947168,
+      "size": 131072
+    },
+    "blk.4.ssm_norm": {
+      "offset": 18841078240,
+      "size": 512
+    },
+    "blk.5.ssm_a": {
+      "offset": 18841078752,
+      "size": 128
+    },
+    "blk.5.ssm_alpha": {
+      "offset": 18841078880,
+      "size": 262144
+    },
+    "blk.5.ssm_beta": {
+      "offset": 18841341024,
+      "size": 262144
+    },
+    "blk.5.ssm_conv1d": {
+      "offset": 18841603168,
+      "size": 131072
+    },
+    "blk.5.ssm_norm": {
+      "offset": 18841734240,
+      "size": 512
+    },
+    "blk.6.ssm_a": {
+      "offset": 18841734752,
+      "size": 128
+    },
+    "blk.6.ssm_alpha": {
+      "offset": 18841734880,
+      "size": 262144
+    },
+    "blk.6.ssm_beta": {
+      "offset": 18841997024,
+      "size": 262144
+    },
+    "blk.6.ssm_conv1d": {
+      "offset": 18842259168,
+      "size": 131072
+    },
+    "blk.6.ssm_norm": {
+      "offset": 18842390240,
+      "size": 512
+    },
+    "blk.8.ssm_a": {
+      "offset": 18842390752,
+      "size": 128
+    },
+    "blk.8.ssm_alpha": {
+      "offset": 18842390880,
+      "size": 262144
+    },
+    "blk.8.ssm_beta": {
+      "offset": 18842653024,
+      "size": 262144
+    },
+    "blk.8.ssm_conv1d": {
+      "offset": 18842915168,
+      "size": 131072
+    },
+    "blk.8.ssm_norm": {
+      "offset": 18843046240,
+      "size": 512
+    },
+    "blk.9.ssm_a": {
+      "offset": 18843046752,
+      "size": 128
+    },
+    "blk.9.ssm_alpha": {
+      "offset": 18843046880,
+      "size": 262144
+    },
+    "blk.9.ssm_beta": {
+      "offset": 18843309024,
+      "size": 262144
+    },
+    "blk.9.ssm_conv1d": {
+      "offset": 18843571168,
+      "size": 131072
+    },
+    "blk.9.ssm_norm": {
+      "offset": 18843702240,
+      "size": 512
+    },
+    "blk.10.ssm_a": {
+      "offset": 18843702752,
+      "size": 128
+    },
+    "blk.10.ssm_alpha": {
+      "offset": 18843702880,
+      "size": 262144
+    },
+    "blk.10.ssm_beta": {
+      "offset": 18843965024,
+      "size": 262144
+    },
+    "blk.10.ssm_conv1d": {
+      "offset": 18844227168,
+      "size": 131072
+    },
+    "blk.10.ssm_norm": {
+      "offset": 18844358240,
+      "size": 512
+    },
+    "blk.12.ssm_a": {
+      "offset": 18844358752,
+      "size": 128
+    },
+    "blk.12.ssm_alpha": {
+      "offset": 18844358880,
+      "size": 262144
+    },
+    "blk.12.ssm_beta": {
+      "offset": 18844621024,
+      "size": 262144
+    },
+    "blk.12.ssm_conv1d": {
+      "offset": 18844883168,
+      "size": 131072
+    },
+    "blk.12.ssm_norm": {
+      "offset": 18845014240,
+      "size": 512
+    },
+    "blk.13.ssm_a": {
+      "offset": 18845014752,
+      "size": 128
+    },
+    "blk.13.ssm_alpha": {
+      "offset": 18845014880,
+      "size": 262144
+    },
+    "blk.13.ssm_beta": {
+      "offset": 18845277024,
+      "size": 262144
+    },
+    "blk.13.ssm_conv1d": {
+      "offset": 18845539168,
+      "size": 131072
+    },
+    "blk.13.ssm_norm": {
+      "offset": 18845670240,
+      "size": 512
+    },
+    "blk.14.ssm_a": {
+      "offset": 18845670752,
+      "size": 128
+    },
+    "blk.14.ssm_alpha": {
+      "offset": 18845670880,
+      "size": 262144
+    },
+    "blk.14.ssm_beta": {
+      "offset": 18845933024,
+      "size": 262144
+    },
+    "blk.14.ssm_conv1d": {
+      "offset": 18846195168,
+      "size": 131072
+    },
+    "blk.14.ssm_norm": {
+      "offset": 18846326240,
+      "size": 512
+    },
+    "blk.16.ssm_a": {
+      "offset": 18846326752,
+      "size": 128
+    },
+    "blk.16.ssm_alpha": {
+      "offset": 18846326880,
+      "size": 262144
+    },
+    "blk.16.ssm_beta": {
+      "offset": 18846589024,
+      "size": 262144
+    },
+    "blk.16.ssm_conv1d": {
+      "offset": 18846851168,
+      "size": 131072
+    },
+    "blk.16.ssm_norm": {
+      "offset": 18846982240,
+      "size": 512
+    },
+    "blk.17.ssm_a": {
+      "offset": 18846982752,
+      "size": 128
+    },
+    "blk.17.ssm_alpha": {
+      "offset": 18846982880,
+      "size": 262144
+    },
+    "blk.17.ssm_beta": {
+      "offset": 18847245024,
+      "size": 262144
+    },
+    "blk.17.ssm_conv1d": {
+      "offset": 18847507168,
+      "size": 131072
+    },
+    "blk.17.ssm_norm": {
+      "offset": 18847638240,
+      "size": 512
+    },
+    "blk.18.ssm_a": {
+      "offset": 18847638752,
+      "size": 128
+    },
+    "blk.18.ssm_alpha": {
+      "offset": 18847638880,
+      "size": 262144
+    },
+    "blk.18.ssm_beta": {
+      "offset": 18847901024,
+      "size": 262144
+    },
+    "blk.18.ssm_conv1d": {
+      "offset": 18848163168,
+      "size": 131072
+    },
+    "blk.18.ssm_norm": {
+      "offset": 18848294240,
+      "size": 512
+    },
+    "blk.20.ssm_a": {
+      "offset": 18848294752,
+      "size": 128
+    },
+    "blk.20.ssm_alpha": {
+      "offset": 18848294880,
+      "size": 262144
+    },
+    "blk.20.ssm_beta": {
+      "offset": 18848557024,
+      "size": 262144
+    },
+    "blk.20.ssm_conv1d": {
+      "offset": 18848819168,
+      "size": 131072
+    },
+    "blk.20.ssm_norm": {
+      "offset": 18848950240,
+      "size": 512
+    },
+    "blk.21.ssm_a": {
+      "offset": 18848950752,
+      "size": 128
+    },
+    "blk.21.ssm_alpha": {
+      "offset": 18848950880,
+      "size": 262144
+    },
+    "blk.21.ssm_beta": {
+      "offset": 18849213024,
+      "size": 262144
+    },
+    "blk.21.ssm_conv1d": {
+      "offset": 18849475168,
+      "size": 131072
+    },
+    "blk.21.ssm_norm": {
+      "offset": 18849606240,
+      "size": 512
+    },
+    "blk.22.ssm_a": {
+      "offset": 18849606752,
+      "size": 128
+    },
+    "blk.22.ssm_alpha": {
+      "offset": 18849606880,
+      "size": 262144
+    },
+    "blk.22.ssm_beta": {
+      "offset": 18849869024,
+      "size": 262144
+    },
+    "blk.22.ssm_conv1d": {
+      "offset": 18850131168,
+      "size": 131072
+    },
+    "blk.22.ssm_norm": {
+      "offset": 18850262240,
+      "size": 512
+    },
+    "blk.24.ssm_a": {
+      "offset": 18850262752,
+      "size": 128
+    },
+    "blk.24.ssm_alpha": {
+      "offset": 18850262880,
+      "size": 262144
+    },
+    "blk.24.ssm_beta": {
+      "offset": 18850525024,
+      "size": 262144
+    },
+    "blk.24.ssm_conv1d": {
+      "offset": 18850787168,
+      "size": 131072
+    },
+    "blk.24.ssm_norm": {
+      "offset": 18850918240,
+      "size": 512
+    },
+    "blk.25.ssm_a": {
+      "offset": 18850918752,
+      "size": 128
+    },
+    "blk.25.ssm_alpha": {
+      "offset": 18850918880,
+      "size": 262144
+    },
+    "blk.25.ssm_beta": {
+      "offset": 18851181024,
+      "size": 262144
+    },
+    "blk.25.ssm_conv1d": {
+      "offset": 18851443168,
+      "size": 131072
+    },
+    "blk.25.ssm_norm": {
+      "offset": 18851574240,
+      "size": 512
+    },
+    "blk.26.ssm_a": {
+      "offset": 18851574752,
+      "size": 128
+    },
+    "blk.26.ssm_alpha": {
+      "offset": 18851574880,
+      "size": 262144
+    },
+    "blk.26.ssm_beta": {
+      "offset": 18851837024,
+      "size": 262144
+    },
+    "blk.26.ssm_conv1d": {
+      "offset": 18852099168,
+      "size": 131072
+    },
+    "blk.26.ssm_norm": {
+      "offset": 18852230240,
+      "size": 512
+    },
+    "blk.28.ssm_a": {
+      "offset": 18852230752,
+      "size": 128
+    },
+    "blk.28.ssm_alpha": {
+      "offset": 18852230880,
+      "size": 262144
+    },
+    "blk.28.ssm_beta": {
+      "offset": 18852493024,
+      "size": 262144
+    },
+    "blk.28.ssm_conv1d": {
+      "offset": 18852755168,
+      "size": 131072
+    },
+    "blk.28.ssm_norm": {
+      "offset": 18852886240,
+      "size": 512
+    },
+    "blk.29.ssm_a": {
+      "offset": 18852886752,
+      "size": 128
+    },
+    "blk.29.ssm_alpha": {
+      "offset": 18852886880,
+      "size": 262144
+    },
+    "blk.29.ssm_beta": {
+      "offset": 18853149024,
+      "size": 262144
+    },
+    "blk.29.ssm_conv1d": {
+      "offset": 18853411168,
+      "size": 131072
+    },
+    "blk.29.ssm_norm": {
+      "offset": 18853542240,
+      "size": 512
+    },
+    "blk.30.ssm_a": {
+      "offset": 18853542752,
+      "size": 128
+    },
+    "blk.30.ssm_alpha": {
+      "offset": 18853542880,
+      "size": 262144
+    },
+    "blk.30.ssm_beta": {
+      "offset": 18853805024,
+      "size": 262144
+    },
+    "blk.30.ssm_conv1d": {
+      "offset": 18854067168,
+      "size": 131072
+    },
+    "blk.30.ssm_norm": {
+      "offset": 18854198240,
+      "size": 512
+    },
+    "blk.32.ssm_a": {
+      "offset": 18854198752,
+      "size": 128
+    },
+    "blk.32.ssm_alpha": {
+      "offset": 18854198880,
+      "size": 262144
+    },
+    "blk.32.ssm_beta": {
+      "offset": 18854461024,
+      "size": 262144
+    },
+    "blk.32.ssm_conv1d": {
+      "offset": 18854723168,
+      "size": 131072
+    },
+    "blk.32.ssm_norm": {
+      "offset": 18854854240,
+      "size": 512
+    },
+    "blk.33.ssm_a": {
+      "offset": 18854854752,
+      "size": 128
+    },
+    "blk.33.ssm_alpha": {
+      "offset": 18854854880,
+      "size": 262144
+    },
+    "blk.33.ssm_beta": {
+      "offset": 18855117024,
+      "size": 262144
+    },
+    "blk.33.ssm_conv1d": {
+      "offset": 18855379168,
+      "size": 131072
+    },
+    "blk.33.ssm_norm": {
+      "offset": 18855510240,
+      "size": 512
+    },
+    "blk.34.ssm_a": {
+      "offset": 18855510752,
+      "size": 128
+    },
+    "blk.34.ssm_alpha": {
+      "offset": 18855510880,
+      "size": 262144
+    },
+    "blk.34.ssm_beta": {
+      "offset": 18855773024,
+      "size": 262144
+    },
+    "blk.34.ssm_conv1d": {
+      "offset": 18856035168,
+      "size": 131072
+    },
+    "blk.34.ssm_norm": {
+      "offset": 18856166240,
+      "size": 512
+    },
+    "blk.36.ssm_a": {
+      "offset": 18856166752,
+      "size": 128
+    },
+    "blk.36.ssm_alpha": {
+      "offset": 18856166880,
+      "size": 262144
+    },
+    "blk.36.ssm_beta": {
+      "offset": 18856429024,
+      "size": 262144
+    },
+    "blk.36.ssm_conv1d": {
+      "offset": 18856691168,
+      "size": 131072
+    },
+    "blk.36.ssm_norm": {
+      "offset": 18856822240,
+      "size": 512
+    },
+    "blk.37.ssm_a": {
+      "offset": 18856822752,
+      "size": 128
+    },
+    "blk.37.ssm_alpha": {
+      "offset": 18856822880,
+      "size": 262144
+    },
+    "blk.37.ssm_beta": {
+      "offset": 18857085024,
+      "size": 262144
+    },
+    "blk.37.ssm_conv1d": {
+      "offset": 18857347168,
+      "size": 131072
+    },
+    "blk.37.ssm_norm": {
+      "offset": 18857478240,
+      "size": 512
+    },
+    "blk.38.ssm_a": {
+      "offset": 18857478752,
+      "size": 128
+    },
+    "blk.38.ssm_alpha": {
+      "offset": 18857478880,
+      "size": 262144
+    },
+    "blk.38.ssm_beta": {
+      "offset": 18857741024,
+      "size": 262144
+    },
+    "blk.38.ssm_conv1d": {
+      "offset": 18858003168,
+      "size": 131072
+    },
+    "blk.38.ssm_norm": {
+      "offset": 18858134240,
+      "size": 512
+    }
+  }
+}

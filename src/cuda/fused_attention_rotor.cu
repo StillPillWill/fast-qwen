@@ -12,7 +12,7 @@
 #define ROPE_BASE 10000000.0f
 
 __constant__ float c_rotor_w[KV_HEADS], c_rotor_x[KV_HEADS], c_rotor_y[KV_HEADS], c_rotor_z[KV_HEADS];
-__constant__ float c_k_codebook[16], c_v_codebook[16]; // Changed v_codebook to 16 levels
+__constant__ float c_k_codebook[16], c_v_codebook[16];
 
 extern "C" void quip_init_rotors_and_codebooks() {
     float rw[KV_HEADS], rx[KV_HEADS], ry[KV_HEADS], rz[KV_HEADS];
@@ -24,7 +24,7 @@ extern "C" void quip_init_rotors_and_codebooks() {
 
     float k_cb[16]; for (int i = 0; i < 16; ++i) k_cb[i] = (float)i / 7.5f - 1.0f;
     CUDA_CHECK(cudaMemcpyToSymbol(c_k_codebook, k_cb, sizeof(k_cb)));
-    CUDA_CHECK(cudaMemcpyToSymbol(c_v_codebook, k_cb, sizeof(k_cb))); // Symmetric 4-bit for V too
+    CUDA_CHECK(cudaMemcpyToSymbol(c_v_codebook, k_cb, sizeof(k_cb))); 
 }
 
 __device__ __forceinline__ void apply_rope(float* vec, int pos, int tid) {
@@ -50,6 +50,18 @@ __device__ __forceinline__ void apply_clifford_rotor(float* vec, int head, int t
     }
 }
 
+__device__ __forceinline__ void apply_clifford_rotor_inv(float* vec, int head, int tid) {
+    if (tid == 0) {
+        float qw = c_rotor_w[head], qx = -c_rotor_x[head], qy = -c_rotor_y[head], qz = -c_rotor_z[head];
+        for (int s = 0; s < HEAD_DIM / 3; ++s) {
+            float vx = vec[s*3+0], vy = vec[s*3+1], vz = vec[s*3+2];
+            float cx = qy * vz - qz * vy, cy = qz * vx - qx * vz, cz = qx * vy - qy * vx;
+            float cx2 = qy * cz - qz * cy, cy2 = qz * cx - qx * cz, cz2 = qx * cy - qy * cx;
+            vec[s*3+0] = vx + 2.0f * (qw * cx + cx2); vec[s*3+1] = vy + 2.0f * (qw * cy + cy2); vec[s*3+2] = vz + 2.0f * (qw * cz + cz2);
+        }
+    }
+}
+
 __device__ __forceinline__ uint8_t quantise_to_codebook(float v, float inv, const float* cb, int levels) {
     float vn = v * inv, best_d = 1e30f; uint8_t best_i = 0;
     for (int i = 0; i < levels; ++i) { float d = (vn - cb[i]) * (vn - cb[i]); if (d < best_d) { best_d = d; best_i = (uint8_t)i; } }
@@ -63,15 +75,13 @@ __global__ void fused_attention_rotor_kernel(const float* __restrict__ h_state, 
     float* k_tile = v_shm + HEAD_DIM, * v_tile = k_tile + KV_TILE * HEAD_DIM;
     __shared__ float s_rmsnorm[128];
 
-    // RMSNorm pre-calculation
     float ss = 0.0f; for (int d = tid; d < HIDDEN_DIM; d += blockDim.x) { float val = h_state[d]; ss += val * val; }
     s_rmsnorm[tid] = ss; __syncthreads();
     for (int off = 64; off > 0; off >>= 1) { if (tid < off) s_rmsnorm[tid] += s_rmsnorm[tid + off]; __syncthreads(); }
     float inv_rms = 1.0f / sqrtf(s_rmsnorm[0] / (float)HIDDEN_DIM + 1e-6f);
 
-    // Q calculation: BlockQ4 GEMV
     float q_val = 0.0f; 
-    const BlockQ4* wq_row = Wq + (size_t)head_id * (HIDDEN_DIM / 32);
+    const BlockQ4* wq_row = Wq + (size_t)(head_id * HEAD_DIM + tid) * (HIDDEN_DIM / 32);
     for (int b = 0; b < HIDDEN_DIM / 32; ++b) {
         BlockQ4 blk = wq_row[b];
         #pragma unroll
@@ -85,11 +95,11 @@ __global__ void fused_attention_rotor_kernel(const float* __restrict__ h_state, 
         }
     }
     q_shm[tid] = q_val; __syncthreads(); apply_rope(q_shm, seq_pos, tid); __syncthreads();
+    apply_clifford_rotor(q_shm, kv_head, tid); __syncthreads();
 
-    // K/V calculation: BlockQ4 GEMV
     float k_val = 0.0f, v_val = 0.0f;
-    const BlockQ4* wk_row = Wk + (size_t)kv_head * (HIDDEN_DIM / 32);
-    const BlockQ4* wv_row = Wv + (size_t)kv_head * (HIDDEN_DIM / 32);
+    const BlockQ4* wk_row = Wk + (size_t)(kv_head * HEAD_DIM + tid) * (HIDDEN_DIM / 32);
+    const BlockQ4* wv_row = Wv + (size_t)(kv_head * HEAD_DIM + tid) * (HIDDEN_DIM / 32);
     for (int b = 0; b < HIDDEN_DIM / 32; ++b) {
         BlockQ4 kb = wk_row[b], vb = wv_row[b];
         #pragma unroll
@@ -102,19 +112,28 @@ __global__ void fused_attention_rotor_kernel(const float* __restrict__ h_state, 
     k_shm[tid] = k_val; v_shm[tid] = v_val; __syncthreads();
     apply_rope(k_shm, seq_pos, tid); __syncthreads();
     apply_clifford_rotor(k_shm, kv_head, tid); __syncthreads();
-    
-    float k_max = fabsf(k_shm[tid]); for (int off = 64; off > 0; off >>= 1) k_max = fmaxf(k_max, __shfl_xor_sync(0xFFFFFFFF, k_max, off));
-    float v_max = fabsf(v_shm[tid]); for (int off = 64; off > 0; off >>= 1) v_max = fmaxf(v_max, __shfl_xor_sync(0xFFFFFFFF, v_max, off));
+    apply_clifford_rotor(v_shm, kv_head, tid); __syncthreads();
+
+    float k_max = fabsf(k_shm[tid]); for (int off = 16; off > 0; off >>= 1) k_max = fmaxf(k_max, __shfl_xor_sync(0xFFFFFFFF, k_max, off));
+    float v_max = fabsf(v_shm[tid]); for (int off = 16; off > 0; off >>= 1) v_max = fmaxf(v_max, __shfl_xor_sync(0xFFFFFFFF, v_max, off));    __shared__ float s_kmax[4], s_vmax[4];
+    if (tid % 32 == 0) { s_kmax[tid / 32] = k_max; s_vmax[tid / 32] = v_max; }
+    __syncthreads();
+    if (tid < 4) {
+        float km = s_kmax[tid], vm = s_vmax[tid];
+        km = fmaxf(km, __shfl_xor_sync(0xFFFFFFFF, km, 2)); km = fmaxf(km, __shfl_xor_sync(0xFFFFFFFF, km, 1));
+        vm = fmaxf(vm, __shfl_xor_sync(0xFFFFFFFF, vm, 2)); vm = fmaxf(vm, __shfl_xor_sync(0xFFFFFFFF, vm, 1));
+        s_kmax[0] = km; s_vmax[0] = vm;
+    }
+    __syncthreads();
+    k_max = s_kmax[0]; v_max = s_vmax[0];
     if (tid == 0) { kv_scales[(kv_head * MAX_SEQ_LEN + seq_pos) * 2 + 0] = k_max; kv_scales[(kv_head * MAX_SEQ_LEN + seq_pos) * 2 + 1] = v_max; }
     
-    // Quantize to 4-bit symmetric
     if (tid < HEAD_DIM / 2) {
         int i = tid * 2;
         uint8_t k0 = quantise_to_codebook(k_shm[i], 1.0f/(k_max+1e-9f), c_k_codebook, 16);
         uint8_t k1 = quantise_to_codebook(k_shm[i+1], 1.0f/(k_max+1e-9f), c_k_codebook, 16);
         k_cache[(kv_head * MAX_SEQ_LEN + seq_pos) * (HEAD_DIM/2) + tid] = k0 | (k1 << 4);
-
-        uint8_t v0 = quantise_to_codebook(v_shm[i], 1.0f/(v_max+1e-9f), c_v_codebook, 16); // Use 16 levels (4-bit) for V too
+        uint8_t v0 = quantise_to_codebook(v_shm[i], 1.0f/(v_max+1e-9f), c_v_codebook, 16);
         uint8_t v1 = quantise_to_codebook(v_shm[i+1], 1.0f/(v_max+1e-9f), c_v_codebook, 16);
         v_cache[(kv_head * MAX_SEQ_LEN + seq_pos) * (HEAD_DIM/2) + tid] = v0 | (v1 << 4);
     }
@@ -122,20 +141,28 @@ __global__ void fused_attention_rotor_kernel(const float* __restrict__ h_state, 
 
     float m_i = -FLT_MAX, l_i = 0.0f, acc_v = 0.0f;
     for (int t = 0; t < seq_len; t += KV_TILE) {
-        // Parallel load into smem
         for (int i = tid; i < KV_TILE * HEAD_DIM; i += blockDim.x) {
             int p = t + i / HEAD_DIM; if (p >= seq_len) { k_tile[i] = 0; v_tile[i] = 0; continue; }
             uint8_t kr = k_cache[(kv_head * MAX_SEQ_LEN + p) * (HEAD_DIM / 2) + (i % HEAD_DIM) / 2];
             k_tile[i] = c_k_codebook[(i % 2 == 0) ? (kr & 0xF) : (kr >> 4)] * kv_scales[(kv_head * MAX_SEQ_LEN + p) * 2 + 0];
             uint8_t vr = v_cache[(kv_head * MAX_SEQ_LEN + p) * (HEAD_DIM / 2) + (i % HEAD_DIM) / 2];
-            v_tile[i] = c_k_codebook[(i % 2 == 0) ? (vr & 0xF) : (vr >> 4)] * kv_scales[(kv_head * MAX_SEQ_LEN + p) * 2 + 1];
+            v_tile[i] = c_v_codebook[(i % 2 == 0) ? (vr & 0xF) : (vr >> 4)] * kv_scales[(kv_head * MAX_SEQ_LEN + p) * 2 + 1];
         }
         __syncthreads();
         for (int p = t; p < t + KV_TILE && p < seq_len; ++p) {
-            // Parallel dot product
             float score = q_shm[tid] * k_tile[(p - t) * HEAD_DIM + tid];
-            for (int off = 64; off > 0; off >>= 1) score += __shfl_xor_sync(0xFFFFFFFF, score, off);
-            score /= sqrtf((float)HEAD_DIM);
+            for (int off = 16; off > 0; off >>= 1) score += __shfl_xor_sync(0xFFFFFFFF, score, off);
+            __shared__ float s_score[4];
+            if (tid % 32 == 0) s_score[tid / 32] = score;
+            __syncthreads();
+            if (tid < 4) {
+                float s = s_score[tid];
+                s += __shfl_xor_sync(0xFFFFFFFF, s, 2);
+                s += __shfl_xor_sync(0xFFFFFFFF, s, 1);
+                s_score[0] = s;
+            }
+            __syncthreads();
+            score = s_score[0] / sqrtf((float)HEAD_DIM);
             float m_next = fmaxf(m_i, score), l_next = l_i * expf(m_i - m_next) + expf(score - m_next);
             acc_v = acc_v * expf(m_i - m_next) * (l_i / l_next) + (expf(score - m_next) / l_next) * v_tile[(p - t) * HEAD_DIM + tid];
             m_i = m_next; l_i = l_next;
@@ -145,10 +172,14 @@ __global__ void fused_attention_rotor_kernel(const float* __restrict__ h_state, 
     attn_out[head_id * HEAD_DIM + tid] = acc_v;
 }
 
-__global__ void attention_out_proj_kernel(const float* Wo, const float* attn_out, float* attn_proj) {
+__global__ void attention_out_proj_kernel(const BlockQ4* Wo, const float* attn_out, float* attn_proj, int inner_dim) {
     int r = blockIdx.x * blockDim.x + threadIdx.x; if (r >= HIDDEN_DIM) return;
-    float sum = 0.0f; const float* w_row = Wo + (size_t)r * OUT_INNER;
-    for (int d = 0; d < OUT_INNER; ++d) sum += w_row[d] * attn_out[d];
+    float sum = 0.0f;
+    const BlockQ4* row_ptr = Wo + (size_t)r * (inner_dim / 32);
+    for (int b = 0; b < inner_dim / 32; ++b) {
+        BlockQ4 blk = row_ptr[b];
+        for (int k = 0; k < 32; ++k) sum += (float)((blk.qs[k] & 0xF) - 8) * blk.scale * attn_out[b * 32 + k];
+    }
     attn_proj[r] = sum;
 }
 
@@ -157,7 +188,7 @@ extern "C" void launch_fused_attention_rotor(cudaStream_t s, const float* h, con
     size_t smem = (HEAD_DIM * 3 + 2 * 32 * HEAD_DIM) * 4 + 256;
     fused_attention_rotor_kernel<<<grid, block, smem, s>>>(h, wq, wk, wv, norm, pos, len, k, v, sc, out);
 }
-extern "C" void launch_attention_out_proj(cudaStream_t s, const float* Wo, const float* attn_out, float* attn_proj) {
+extern "C" void launch_attention_out_proj(cudaStream_t s, const BlockQ4* Wo, const float* attn_out, float* attn_proj, int inner_dim) {
     int threads = 256; int blocks = (HIDDEN_DIM + threads - 1) / threads;
-    attention_out_proj_kernel<<<blocks, threads, 0, s>>>(Wo, attn_out, attn_proj);
+    attention_out_proj_kernel<<<blocks, threads, 0, s>>>(Wo, attn_out, attn_proj, inner_dim);
 }

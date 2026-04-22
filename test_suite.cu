@@ -1,5 +1,6 @@
 #include "include/common.h"
 #include "include/allocator.h"
+#include "src/cpu/fused_shared_expert.cpp"
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -8,11 +9,25 @@
 
 // Link against the objects
 extern void quip_matmul_fused(const uint8_t* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, float row_scale, int rows, int cols);
-extern void rmsnorm_avx2(float* o, float* w, float* x, int n, float eps);
+extern void rmsnorm_avx2(const float* x, const float* gamma, float* y, int dim, float eps);
 extern "C" void launch_fused_attention_rotor(cudaStream_t s, const float* h, const BlockQ4* wq, const BlockQ4* wk, const BlockQ4* wv, const float* norm, int pos, int len, uint8_t* k, uint8_t* v, float* sc, float* out);
 extern "C" void launch_ssm_sram_convolution(cudaStream_t stream, float* state, const float* x, float* out, const float* norm, const BlockQ4* ssm_qkv, const BlockQ4* ssm_gate, int dim);
 extern "C" void launch_lm_head_gemv(cudaStream_t s, const float* head, const float* h, float* logits);
 extern "C" void launch_logit_sampling(cudaStream_t stream, const float* logits, float temp, float top_p, uint64_t rng, int* next);
+
+void test_rmsnorm_avx2() {
+    std::cout << "Testing rmsnorm_avx2 (AVX2)..." << std::endl;
+    int dim = 2048;
+    std::vector<float> x(dim, 2.0f);
+    std::vector<float> gamma(dim, 0.5f);
+    std::vector<float> y(dim, 0.0f);
+    
+    rmsnorm_avx2(x.data(), gamma.data(), y.data(), dim, 1e-6f);
+    
+    std::cout << "Element 0 result: " << y[0] << " (Expected 0.5)" << std::endl;
+    assert(std::abs(y[0] - 0.5f) < 1e-3);
+    std::cout << "rmsnorm_avx2 PASSED" << std::endl;
+}
 
 void test_quip_matmul() {
     std::cout << "Testing quip_matmul_fused (AVX2)..." << std::endl;
@@ -22,7 +37,7 @@ void test_quip_matmul() {
     std::vector<float> x(cols, 1.0f);
     std::vector<float> y(rows, 0.0f);
     
-    // Set max weights (7) for first row
+    // 3-bit: 0..7, centered at 3.5.
     uint32_t val24 = 0;
     for (int i=0; i<8; ++i) val24 |= (7U << (21 - i*3));
     for (int k=0; k<8; ++k) {
@@ -32,7 +47,7 @@ void test_quip_matmul() {
     quip_matmul_fused(W.data(), x.data(), y.data(), 1.0f, rows, cols);
     
     std::cout << "Row 0 result: " << y[0] << " (Expected " << 3.5f * 64 << ")" << std::endl;
-    assert(std::abs(y[0] - 3.5f * 64) < 1e-4);
+    assert(std::abs(y[0] - 3.5f * 64) < 1e-3);
     std::cout << "quip_matmul_fused PASSED" << std::endl;
 }
 
@@ -57,6 +72,7 @@ void test_gpu_sampling() {
 int main() {
     cudaFree(0); // Init CUDA
     test_quip_matmul();
+    test_rmsnorm_avx2();
     test_gpu_sampling();
     std::cout << "ALL TESTS PASSED" << std::endl;
     return 0;

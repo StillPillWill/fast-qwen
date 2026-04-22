@@ -49,6 +49,7 @@ std::map<std::string, TensorInfo> parse_manifest(const std::string& path) {
     std::ifstream f(path); if (!f.is_open()) return manifest;
     std::string line;
     while (std::getline(f, line)) {
+        if (line.find("\"tensors\"") != std::string::npos) continue;
         size_t name_start = line.find("\""); if (name_start == std::string::npos) continue;
         size_t name_end = line.find("\"", name_start + 1);
         std::string name = line.substr(name_start + 1, name_end - name_start - 1);
@@ -56,7 +57,12 @@ std::map<std::string, TensorInfo> parse_manifest(const std::string& path) {
             std::string o_line, s_line;
             std::getline(f, o_line); std::getline(f, s_line);
             auto get_val = [](const std::string& l) {
-                size_t c = l.find(":"); return std::stoull(l.substr(c + 1, l.find_last_of("0123456789") - c));
+                size_t c = l.find(":"); 
+                if (c == std::string::npos) return 0ULL;
+                size_t start = l.find_first_of("0123456789", c);
+                if (start == std::string::npos) return 0ULL;
+                size_t end = l.find_first_not_of("0123456789", start);
+                return std::stoull(l.substr(start, end == std::string::npos ? end : end - start));
             };
             manifest[name] = { get_val(o_line), get_val(s_line) };
         }
@@ -114,15 +120,13 @@ ModelWeights* load_model(NUMAPool& weight_pool, NUMAPool& kv_pool) {
     load_to_cuda("router_weights", (void*&)W->gate_w);
     load_to_cuda("output", (void*&)W->lm_head);
     
-    // Dev norms
     size_t anob = (size_t)NUM_LAYERS * HIDDEN_DIM * sizeof(float);
     CUDA_CHECK(cudaMalloc(&W->dev_attn_norm, anob)); CUDA_CHECK(cudaMemcpy(W->dev_attn_norm, W->attn_norm, anob, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMalloc(&W->dev_ffn_norm, anob)); CUDA_CHECK(cudaMemcpy(W->dev_ffn_norm, W->ffn_norm, anob, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMalloc(&W->dev_final_norm, HIDDEN_DIM * sizeof(float))); CUDA_CHECK(cudaMemcpy(W->dev_final_norm, W->final_norm, HIDDEN_DIM * sizeof(float), cudaMemcpyHostToDevice));
 
-    // KV Cache
     size_t kkb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2);
-    size_t kvvb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2); // Symmetric 4-bit
+    size_t kvvb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * (HEAD_DIM/2); 
     size_t kscb = (size_t)NUM_LAYERS * KV_HEADS * MAX_SEQ_LEN * 2 * sizeof(float);
     CUDA_CHECK(cudaMalloc(&W->k_cache, kkb)); CUDA_CHECK(cudaMalloc(&W->v_cache, kvvb)); CUDA_CHECK(cudaMalloc(&W->kv_scales, kscb));
     CUDA_CHECK(cudaMemset(W->k_cache, 0, kkb)); CUDA_CHECK(cudaMemset(W->v_cache, 0, kvvb)); CUDA_CHECK(cudaMemset(W->kv_scales, 0, kscb));

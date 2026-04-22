@@ -2,7 +2,7 @@
 // fused_shared_expert.cpp — CPU-side "Shared Lead-In" fused kernel.
 // =============================================================================
 
-#include "common.h"
+#include "../../include/common.h"
 #include <immintrin.h>
 #include <cmath>
 #include <cassert>
@@ -12,7 +12,7 @@
 void quip_matmul_fused(const uint8_t* __restrict__, const float* __restrict__, float* __restrict__, float, int, int);
 void quip_apply_rotation_R(const float* __restrict__, float* __restrict__, bool transpose, int dim);
 
-static void rmsnorm_avx2(const float* __restrict__ x, const float* __restrict__ gamma, float* __restrict__ y, int dim, float eps) {
+void rmsnorm_avx2(const float* __restrict__ x, const float* __restrict__ gamma, float* __restrict__ y, int dim, float eps) {
     __m256 acc = _mm256_setzero_ps();
     for (int i = 0; i < dim; i += 8) { __m256 v = _mm256_load_ps(x + i); acc = _mm256_fmadd_ps(v, v, acc); }
     __m128 lo = _mm256_castps256_ps128(acc); __m128 hi = _mm256_extractf128_ps(acc, 1); __m128 s4 = _mm_add_ps(lo, hi); __m128 s2 = _mm_hadd_ps(s4, s4); __m128 s1 = _mm_hadd_ps(s2, s2);
@@ -29,12 +29,8 @@ static ENGINE_FORCEINLINE __m256 avx2_sigmoid(__m256 x) {
     return _mm256_div_ps(one, _mm256_add_ps(one, e));
 }
 static void swiglu_avx2(const float* __restrict__ gate, const float* __restrict__ up, float* __restrict__ out, int dim) {
-    for (int i = 0; i < dim; i += 8) { __m256 vg = _mm256_load_ps(gate + i); __m256 vu = _mm256_load_ps(up + i); _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_mul_ps(vg, avx2_sigmoid(vg)), vu)); }
+    for (int i = 0; i < dim; i += 8) { __m256 vg = _mm256_loadu_ps(gate + i); __m256 vu = _mm256_loadu_ps(up + i); _mm256_storeu_ps(out + i, _mm256_mul_ps(_mm256_mul_ps(vg, avx2_sigmoid(vg)), vu)); }
 }
-
-struct SharedExpertScratch {
-    float* normed_x; float* x_rotated; float* gate_out; float* up_out; float* intermediate; float* down_out; float* y_out; float* ir_rot;
-};
 
 void fused_shared_expert_forward(const float* x, SharedExpertScratch* scratch, const ExpertWeights* W) {
     assert(W && "expert weights not initialised");
